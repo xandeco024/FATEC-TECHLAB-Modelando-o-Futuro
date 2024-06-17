@@ -16,8 +16,12 @@ int minusButtonState = 0;
 LiquidCrystal lcd(8, 9, 10, 11, 12, 13);
 
 float scale = 1;
-float currentTemp = 0;
+double currentTemp = 0;
 float targetTemp = 0;
+
+//temperature sensor parameters
+#define R0 100000
+#define B 3950
 
 void setup() {
     pinMode(tempSensorPin, INPUT);
@@ -53,7 +57,7 @@ void TempScreen() {
 
 void loop() {
     //temperature reading
-    currentTemp = analogRead(tempSensorPin);
+    currentTemp = analogRead(tempSensorPin); // Ler valor do sensor
 
     //button handling
     if (digitalRead(scaleButtonPin) == HIGH && scaleButtonState == 0) {
