@@ -22,16 +22,33 @@ float targetTemp = 0;
 void setup() {
     pinMode(tempSensorPin, INPUT);
     pinMode(relePin, OUTPUT);
-    pinMode(buzzerPin, OUTPUT);
 
     pinMode(plusButtonPin, INPUT);
     pinMode(scaleButtonPin, INPUT);
     pinMode(minusButtonPin, INPUT);
 
     lcd.begin(16, 2);
-    lcd.setCursor(0, 0);
-    lcd.print("Current: ");
     Serial.begin(9600);
+}
+
+void TempScreen() {
+    //screen handling
+
+    lcd.setCursor(0, 0);
+    lcd.print("Cur:");
+    //print the current temp in the following format: 999.9C
+    lcd.print(currentTemp, 1);
+    lcd.print("C   ");
+
+    lcd.setCursor(0, 1);
+    lcd.print("Tar:");
+    lcd.print(targetTemp, 1);
+    lcd.print("C   ");
+
+    lcd.setCursor(12, 1);
+    //pint the scale with 1 decimal
+    lcd.print("S");
+    lcd.print(scale, 1);
 }
 
 void loop() {
@@ -79,29 +96,10 @@ void loop() {
     if (currentTemp < targetTemp) {
         digitalWrite(relePin, HIGH);
     } 
-    else {
+    else 
+    {
         digitalWrite(relePin, LOW);
-
-        if (currentTemp - targetTemp > 5) {
-            tone(buzzerPin, 1000, 1000);
-        }    
-        else {
-        }
     }
 
-    //screen handling
-    lcd.setCursor(0, 0);
-    lcd.print("Cur:");
-    lcd.print(currentTemp, 1);
-    lcd.print("C");
-
-    lcd.setCursor(0, 1);
-    lcd.print("Tar:");
-    lcd.print(targetTemp, 1);
-    lcd.print("C");
-
-    lcd.setCursor(12, 1);
-    //pint the scale with 1 decimal
-    lcd.print("S");
-    lcd.print(scale, 1);
+    TempScreen(); 
 }
