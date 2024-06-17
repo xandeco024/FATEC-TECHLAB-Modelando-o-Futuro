@@ -1,0 +1,41 @@
+-=- RECICLADOR -=-
+
+    Funções:
+
+        - iniciar
+        - pausar (só para o motor)
+        - liga/desliga (para tudo e começa a esfriar)
+        - controle de temperatura ( 2 botões ou potenciômetro)
+        - controle de sensibilidade potenciometro ( 2 botões)
+        - sensor de limite ( precisamos pensar )
+        - sensor de enroscagem
+
+    Funcionalidades:
+
+        - verificar temperatura (não pode iniciar se não estiver quente) -> status de funcionamento
+        - verificar andamento:
+            - se há pet -> pausa para aguardar reinicio
+            - se enroscou -> pausa para aguardar manutencao
+        - derreter pet
+        - puxar
+        - enrolar
+
+    UI:
+
+        - status de funcionamento
+        - temperatura:
+            - rasuavel para toque -> para
+            - insuficiente para iniciar -> aguarda
+            - pronto para iniciar -> aguarda
+            - quente demais -> aguarda (pausa para esfriar)
+
+-=- CORTADOR -=-
+
+    Funções:
+
+        - liga/desliga
+        - pausar
+
+    Funcionalidades:
+        
+        - rodar.
