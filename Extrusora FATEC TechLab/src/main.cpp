@@ -2,12 +2,22 @@
 #include <LiquidCrystal.h>
 
 //pin definition
-#define plusButtonPin 2
-#define scaleButtonPin 3
-#define minusButtonPin 4
-#define tempSensorPin A5
-#define relePin 5
-#define buzzerPin 6
+
+//input pins
+#define plusButtonPin A2
+#define scaleButtonPin A1
+#define minusButtonPin A0
+#define tempSensorPin A3
+
+//output pins
+#define relePin 7
+
+//stepper motor pins
+#define stepSpeedPin 6
+#define stepIn1Pin 2
+#define stepIn2Pin 3
+#define stepIn3Pin 4
+#define stepIn4Pin 5
 
 int plusButtonState = 0;
 int scaleButtonState = 0;
@@ -30,6 +40,12 @@ void setup() {
     pinMode(plusButtonPin, INPUT);
     pinMode(scaleButtonPin, INPUT);
     pinMode(minusButtonPin, INPUT);
+
+    pinMode(stepSpeedPin, OUTPUT);
+    pinMode(stepIn1Pin, OUTPUT);
+    pinMode(stepIn2Pin, OUTPUT);
+    pinMode(stepIn3Pin, OUTPUT);
+    pinMode(stepIn4Pin, OUTPUT);
 
     lcd.begin(16, 2);
     Serial.begin(9600);
@@ -106,4 +122,31 @@ void loop() {
     }
 
     TempScreen(); 
+
+    //stepper motor control
+    digitalWrite(stepSpeedPin, HIGH);
+
+    digitalWrite(stepIn1Pin, HIGH);
+    digitalWrite(stepIn2Pin, LOW);
+    digitalWrite(stepIn3Pin, LOW);
+    digitalWrite(stepIn4Pin, LOW);
+    delay(10);
+
+    digitalWrite(stepIn1Pin, LOW);
+    digitalWrite(stepIn2Pin, HIGH);
+    digitalWrite(stepIn3Pin, LOW);
+    digitalWrite(stepIn4Pin, LOW);
+    delay(10);
+
+    digitalWrite(stepIn1Pin, LOW);
+    digitalWrite(stepIn2Pin, LOW);
+    digitalWrite(stepIn3Pin, HIGH);
+    digitalWrite(stepIn4Pin, LOW);
+    delay(10);
+
+    digitalWrite(stepIn1Pin, LOW);
+    digitalWrite(stepIn2Pin, LOW);
+    digitalWrite(stepIn3Pin, LOW);
+    digitalWrite(stepIn4Pin, HIGH);
+    delay(10);
 }
