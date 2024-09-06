@@ -20,18 +20,26 @@
 #define plusStepSpeedPin A5
 #define minusStepSpeedPin A4
 
-int plusButtonState = 0;
-int scaleButtonState = 0;
-int minusButtonState = 0;
+int plusTempBtnState = 0;
+int scaleTempBtnState = 0;
+int minuTempBtnState = 0;
+
+int stepState = 0;
+int stepControl = 0;
+int stepSpeed = 0;
+long stepSpeedTime = 0;
+int plusStepSpeedBtnState = 0;
+int minusStepSpeedBtnState = 0;
+int stepControlBtnState = 0;
 
 LiquidCrystal lcd(8, 9, 10, 11, 12, 13);
 
-float scale = 1;
-double currentTemp = 0;
-float targetTemp = 0;
+int scale = 1;
+int currentTemp = 0;
+int targetTemp = 0;
 
 int tempReadDelay = 1000;
-int tempReadTime = 0;
+long tempReadTime = 0;
 
 void setup() {
     pinMode(tempSensorPin, INPUT);
@@ -52,29 +60,79 @@ void setup() {
 }
 
 void TempScreen() {
-    //screen handling
+    lcd.setCursor(6, 0);
+    lcd.print("|");
+    lcd.setCursor(6, 1);
+    lcd.print("|");
 
-    // lcd.setCursor(0, 0);
-    // lcd.print("Cur:");
-    // //print the current temp in the following format: 999.9C
-    // lcd.print(currentTemp, 1);
-    // lcd.print("C   ");
+    lcd.setCursor(0, 0);
+    lcd.print("C:");
+    char tempCurrent[4];
+    sprintf(tempCurrent, "%3d", currentTemp);
+    lcd.print(tempCurrent);
+    lcd.print("C");
 
-    // lcd.setCursor(0, 1);
-    // lcd.print("Tar:");
-    // lcd.print(targetTemp, 1);
-    // lcd.print("C   ");
+    lcd.setCursor(0, 1);
+    lcd.print("T:");
+    char tempTarget[4];
+    sprintf(tempTarget, "%3d", targetTemp);
+    lcd.print(tempTarget);
+    lcd.print("C");
 
-    // lcd.setCursor(12, 1);
-    // //pint the scale with 1 decimal
-    // lcd.print("S");
-    // lcd.print(scale);
+    lcd.setCursor(7, 0);
+    lcd.print("S:");
+    char tempScale[4];
+    sprintf(tempScale, "%3d", scale);
+    lcd.print(tempScale);
 
-    //999 | 999ºC S100
-    //DES 100 | 100 RPM
+    lcd.setCursor(7, 1);
+    lcd.print("S:");
+    char tempStepSpeed[4];
+    sprintf(tempStepSpeed, "%3d", stepSpeed);
+    lcd.print(tempStepSpeed);
+    lcd.print("RPM");
 }
 
-int ReadTemp() {
+void StepperControl() {
+    if (stepControl == 1) {
+        //control without the delay function
+
+        //translate rpm to step speed (thats for later)
+        if (millis() - stepSpeedTime > stepSpeed) {
+            stepSpeedTime = millis();
+            if (stepState == 0) {
+                digitalWrite(stepIn1Pin, HIGH);
+                digitalWrite(stepIn2Pin, LOW);
+                digitalWrite(stepIn3Pin, LOW);
+                digitalWrite(stepIn4Pin, LOW);
+                stepState = 1;
+            } 
+            else if (stepState == 1) {
+                digitalWrite(stepIn1Pin, LOW);
+                digitalWrite(stepIn2Pin, HIGH);
+                digitalWrite(stepIn3Pin, LOW);
+                digitalWrite(stepIn4Pin, LOW);
+                stepState = 2;
+            } 
+            else if (stepState == 2) {
+                digitalWrite(stepIn1Pin, LOW);
+                digitalWrite(stepIn2Pin, LOW);
+                digitalWrite(stepIn3Pin, HIGH);
+                digitalWrite(stepIn4Pin, LOW);
+                stepState = 3;
+            } 
+            else if (stepState == 3) {
+                digitalWrite(stepIn1Pin, LOW);
+                digitalWrite(stepIn2Pin, LOW);
+                digitalWrite(stepIn3Pin, LOW);
+                digitalWrite(stepIn4Pin, HIGH);
+                stepState = 0;
+            }
+        }
+    }
+}
+
+void ReadTemp() {
     //temperature reading with delay but not with the delay function
     if (millis() - tempReadTime > tempReadDelay) {
         tempReadTime = millis();
@@ -82,13 +140,10 @@ int ReadTemp() {
     }
 }
 
-void loop() {
-    //temperature reading
-    ReadTemp();
-
-    //button handling
-    if (digitalRead(scaleTempBtnPin) == HIGH && scaleButtonState == 0) {
-        scaleButtonState = 1;
+void ReadButtons()
+{
+    if (digitalRead(scaleTempBtnPin) == HIGH && scaleTempBtnState == 0) {
+        scaleTempBtnState = 1;
 
         if (scale == 1) {
             scale = 10;
@@ -101,26 +156,56 @@ void loop() {
         }
     }
     else if (digitalRead(scaleTempBtnPin) == LOW) {
-        scaleButtonState = 0;
+        scaleTempBtnState = 0;
     }
 
-    if (digitalRead(plusTempBtnPin) == HIGH && plusButtonState == 0) {
-        plusButtonState = 1;
+    if (digitalRead(plusTempBtnPin) == HIGH && plusTempBtnState == 0) {
+        plusTempBtnState = 1;
         targetTemp += scale;
+        if (targetTemp > 999) {
+            targetTemp = 999;
+        }
     }
     else if (digitalRead(plusTempBtnPin) == LOW) {
-        plusButtonState = 0;
+        plusTempBtnState = 0;
     }
 
-    if (digitalRead(minusTempBtnPin) == HIGH && minusButtonState == 0) {
-        minusButtonState = 1;
+    if (digitalRead(minusTempBtnPin) == HIGH && minuTempBtnState == 0) {
+        minuTempBtnState = 1;
         targetTemp -= scale;
         if (targetTemp < 0) {
             targetTemp = 0;
         }
     }
     else if (digitalRead(minusTempBtnPin) == LOW) {
-        minusButtonState = 0;
+        minuTempBtnState = 0;
+    }
+
+    if (digitalRead(plusStepSpeedPin) == HIGH && plusStepSpeedBtnState == 0) {
+        plusStepSpeedBtnState = 1;
+        stepSpeed += 10;
+    }
+    else if (digitalRead(plusStepSpeedPin) == LOW) {
+        plusStepSpeedBtnState = 0;
+    }
+
+    if (digitalRead(minusStepSpeedPin) == HIGH && minusStepSpeedBtnState == 0) {
+        minusStepSpeedBtnState = 1;
+        stepSpeed -= 10;
+        if (stepSpeed < 0) {
+            stepSpeed = 0;
+        }
+    }
+    else if (digitalRead(minusStepSpeedPin) == LOW) {
+        minusStepSpeedBtnState = 0;
+    }
+
+    if (digitalRead(stepControlPin) == HIGH && stepControlBtnState == 0) {
+        stepControlBtnState = 1;
+        stepControl = stepControl == 0 ? 1 : 0;
+    }
+    else if (digitalRead(stepControlPin) == LOW) {
+        stepControlBtnState = 0;
     }
 
     //temperature control
@@ -132,6 +217,12 @@ void loop() {
         digitalWrite(relePin, LOW);
     }
 
+}
+
+void loop() {
+    ReadTemp();
+    ReadButtons();
+    StepperControl();
     TempScreen(); 
 
     //stepper motor control
