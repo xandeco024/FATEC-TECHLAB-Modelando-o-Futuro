@@ -10,6 +10,9 @@
 #define tempSensorPin A3
 #define relePin 7
 
+//temp coisos
+int beta = 3977;
+
 //stepper motor pins
 //#define stepSpeedPin 6 (directly connected to 5V)
 #define stepIn1Pin 2
@@ -20,13 +23,18 @@
 #define plusStepSpeedPin A5
 #define minusStepSpeedPin A4
 
+//stepper coisos
+//model: Nema sla oq
+int stepsPerRotation = 5;
+int stepDelay;
+
 int plusTempBtnState = 0;
 int scaleTempBtnState = 0;
 int minuTempBtnState = 0;
 
 int stepState = 0;
 int stepControl = 0;
-int stepSpeed = 0;
+int stepRPM = 0;
 long stepSpeedTime = 0;
 int plusStepSpeedBtnState = 0;
 int minusStepSpeedBtnState = 0;
@@ -57,6 +65,8 @@ void setup() {
 
     lcd.begin(16, 2);
     Serial.begin(9600);
+
+    stepDelay = calcStepDelay(stepRPM);
 }
 
 void TempScreen() {
@@ -88,17 +98,14 @@ void TempScreen() {
     lcd.setCursor(7, 1);
     lcd.print("S:");
     char tempStepSpeed[4];
-    sprintf(tempStepSpeed, "%3d", stepSpeed);
+    sprintf(tempStepSpeed, "%3d", stepRPM);
     lcd.print(tempStepSpeed);
     lcd.print("RPM");
 }
 
 void StepperControl() {
     if (stepControl == 1) {
-        //control without the delay function
-
-        //translate rpm to step speed (thats for later)
-        if (millis() - stepSpeedTime > stepSpeed) {
+        if (millis() - stepSpeedTime > stepRPM) {
             stepSpeedTime = millis();
             if (stepState == 0) {
                 digitalWrite(stepIn1Pin, HIGH);
@@ -183,7 +190,11 @@ void ReadButtons()
 
     if (digitalRead(plusStepSpeedPin) == HIGH && plusStepSpeedBtnState == 0) {
         plusStepSpeedBtnState = 1;
-        stepSpeed += 10;
+        stepRPM += 10;
+        if (stepRPM > 999) { //replae with stepper max rpm
+            stepRPM = 999;
+        }
+        stepDelay = calcStepDelay(stepRPM);
     }
     else if (digitalRead(plusStepSpeedPin) == LOW) {
         plusStepSpeedBtnState = 0;
@@ -191,10 +202,11 @@ void ReadButtons()
 
     if (digitalRead(minusStepSpeedPin) == HIGH && minusStepSpeedBtnState == 0) {
         minusStepSpeedBtnState = 1;
-        stepSpeed -= 10;
-        if (stepSpeed < 0) {
-            stepSpeed = 0;
+        stepRPM -= 10;
+        if (stepRPM < 0) {
+            stepRPM = 0;
         }
+        stepDelay = calcStepDelay(stepRPM);
     }
     else if (digitalRead(minusStepSpeedPin) == LOW) {
         minusStepSpeedBtnState = 0;
@@ -217,6 +229,11 @@ void ReadButtons()
         digitalWrite(relePin, LOW);
     }
 
+}
+
+int calcStepDelay(int rpm) {
+    float SPS = rpm * stepsPerRotation / 60.0;
+    return 1/SPS*1000.0;
 }
 
 void loop() {
