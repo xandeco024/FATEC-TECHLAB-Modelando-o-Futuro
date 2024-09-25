@@ -11,7 +11,38 @@
 #define relePin 7
 
 //temp coisos
-int beta = 3977;
+//model NTC 100k 3950
+float T1 = 273.15;  // valor de temperatura 0º C convertido em Kelvin.
+float T2 = 373.15;  // valor de temperatura 100º C convertido em Kelvin.
+float RT1 = 32114; // valor da resistência (em ohm) na temperatura 0ºC
+float RT2 = 649.8;  // valor da resistência (em ohm) na temperatura 100ºC.
+
+float thermistorBeta() {
+    return log(RT1 / RT2) / (1 / T1 - 1 / T2);
+}
+
+float voltage = 5.0;
+float adcResolution = 1024.0;
+float resistorResistance = 10; //sabhdnaklsdasjdbak eu ri
+
+float thermistorResistance(float thermistorVoltage)
+{
+    return resistorResistance * (voltage / ((thermistorVoltage * voltage) / adcResolution) - 1);
+}
+
+float thermistorTemperatureC(float thermistorResistance)
+{
+    const double kelvin25 = 298.15;
+    const double resistance25 = 10.0;
+
+    double vout = resistorResistance / (resistorResistance + thermistorResistance) * voltage;
+
+    double rt = resistorResistance * vout / (voltage - vout);
+
+    double t = 1 / (1 / kelvin25 + log(rt / resistance25) / thermistorBeta());
+
+    return t - 273.15;
+}
 
 //stepper motor pins
 //#define stepSpeedPin 6 (directly connected to 5V)
