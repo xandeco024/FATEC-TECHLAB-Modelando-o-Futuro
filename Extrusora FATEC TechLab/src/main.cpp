@@ -12,36 +12,38 @@
 
 //temp coisos
 //model NTC 100k 3950
-float T1 = 273.15;  // valor de temperatura 0º C convertido em Kelvin.
-float T2 = 373.15;  // valor de temperatura 100º C convertido em Kelvin.
-float RT1 = 32114; // valor da resistência (em ohm) na temperatura 0ºC
-float RT2 = 649.8;  // valor da resistência (em ohm) na temperatura 100ºC.
+//datasheet https://fab.cba.mit.edu/classes/863.18/CBA/people/erik/reference/11_NTC-3950-100K.pdf
+float T1 = 273.15;  // Temperatura 0º C em Kelvin
+float T2 = 373.15;  // Temperatura 100º C em Kelvin
+float RT1 = 32724.0;  // Resistência do termistor a 0ºC
+float RT2 = 671.0;  // Resistência do termistor a 100ºC
 
+// Tensão de alimentação e resolução do ADC
+float voltage = 5.0;
+float adcResolution = 1024.0;
+float resistorResistance = 10000.0;  // Resistência do resistor em série (10k ohms)
+
+// Função para calcular o valor Beta do termistor
 float thermistorBeta() {
     return log(RT1 / RT2) / (1 / T1 - 1 / T2);
 }
 
-float voltage = 5.0;
-float adcResolution = 1024.0;
-float resistorResistance = 10; //sabhdnaklsdasjdbak eu ri
-
-float thermistorResistance(float thermistorVoltage)
+// Função para calcular a resistência do termistor com base na leitura do ADC
+float thermistorResistance(float adcReading)
 {
-    return resistorResistance * (voltage / ((thermistorVoltage * voltage) / adcResolution) - 1);
+    return resistorResistance * (voltage / (adcReading * voltage / adcResolution) - 1);
 }
 
+// Função para calcular a temperatura em Celsius com base na resistência do termistor
 float thermistorTemperatureC(float thermistorResistance)
 {
-    const double kelvin25 = 298.15;
-    const double resistance25 = 10.0;
+    const double kelvin25 = 298.15;  // 25ºC em Kelvin
+    const double resistance25 = 100000.0;  // Resistência do termistor a 25ºC
 
-    double vout = resistorResistance / (resistorResistance + thermistorResistance) * voltage;
+    // Cálculo da temperatura com base no valor Beta
+    double t = 1 / (1 / kelvin25 + log(thermistorResistance / resistance25) / thermistorBeta());
 
-    double rt = resistorResistance * vout / (voltage - vout);
-
-    double t = 1 / (1 / kelvin25 + log(rt / resistance25) / thermistorBeta());
-
-    return t - 273.15;
+    return t - 273.15;  // Converte de Kelvin para Celsius
 }
 
 //stepper motor pins
@@ -96,8 +98,6 @@ void setup() {
 
     lcd.begin(16, 2);
     Serial.begin(9600);
-
-    stepDelay = calcStepDelay(stepRPM);
 }
 
 void TempScreen() {
@@ -134,9 +134,18 @@ void TempScreen() {
     lcd.print("RPM");
 }
 
+unsigned long calcStepDelay(int rpm) {
+    float SPS = rpm * stepsPerRotation / 60.0;
+    return 1/SPS*1000.0;
+}
+
+
 void StepperControl() {
+
+    //stepDelay = calcStepDelay(stepRPM);
+
     if (stepControl == 1) {
-        if (millis() - stepSpeedTime > stepRPM) {
+        if (millis() - stepSpeedTime > stepDelay) {
             stepSpeedTime = millis();
             if (stepState == 0) {
                 digitalWrite(stepIn1Pin, HIGH);
@@ -175,6 +184,7 @@ void ReadTemp() {
     if (millis() - tempReadTime > tempReadDelay) {
         tempReadTime = millis();
         currentTemp = analogRead(tempSensorPin);
+        currentTemp = thermistorTemperatureC(thermistorResistance(currentTemp));
     }
 }
 
@@ -262,40 +272,9 @@ void ReadButtons()
 
 }
 
-int calcStepDelay(int rpm) {
-    float SPS = rpm * stepsPerRotation / 60.0;
-    return 1/SPS*1000.0;
-}
-
 void loop() {
     ReadTemp();
     ReadButtons();
     StepperControl();
-    TempScreen(); 
-
-    //stepper motor control
-
-    // digitalWrite(stepIn1Pin, HIGH);
-    // digitalWrite(stepIn2Pin, LOW);
-    // digitalWrite(stepIn3Pin, LOW);
-    // digitalWrite(stepIn4Pin, LOW);
-    // delay(10);
-
-    // digitalWrite(stepIn1Pin, LOW);
-    // digitalWrite(stepIn2Pin, HIGH);
-    // digitalWrite(stepIn3Pin, LOW);
-    // digitalWrite(stepIn4Pin, LOW);
-    // delay(10);
-
-    // digitalWrite(stepIn1Pin, LOW);
-    // digitalWrite(stepIn2Pin, LOW);
-    // digitalWrite(stepIn3Pin, HIGH);
-    // digitalWrite(stepIn4Pin, LOW);
-    // delay(10);
-
-    // digitalWrite(stepIn1Pin, LOW);
-    // digitalWrite(stepIn2Pin, LOW);
-    // digitalWrite(stepIn3Pin, LOW);
-    // digitalWrite(stepIn4Pin, HIGH);
-    // delay(10);
+    TempScreen();
 }
