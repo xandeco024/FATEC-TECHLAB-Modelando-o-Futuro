@@ -1,5 +1,5 @@
 #include <Arduino.h>
-#include <LiquidCrystal.h>
+#include <LiquidCrystal_I2C.h>
 
 //pin definition
 
@@ -8,7 +8,7 @@
 #define scaleTempBtnPin A1
 #define minusTempBtnPin A0
 #define tempSensorPin A3
-#define relePin 7
+#define relePin 6
 
 //temp coisos
 //model NTC 100k 3950
@@ -52,7 +52,7 @@ float thermistorTemperatureC(float thermistorResistance)
 #define stepIn2Pin 3
 #define stepIn3Pin 4
 #define stepIn4Pin 5
-#define stepControlPin 6
+#define stepControlPin 7
 #define plusStepSpeedPin A5
 #define minusStepSpeedPin A4
 
@@ -73,7 +73,8 @@ int plusStepSpeedBtnState = 0;
 int minusStepSpeedBtnState = 0;
 int stepControlBtnState = 0;
 
-LiquidCrystal lcd(8, 9, 10, 11, 12, 13);
+//LiquidCrystal lcd(8, 9, 10, 11, 12, 13);
+LiquidCrystal_I2C lcd(0x27, 16, 2);
 
 int scale = 1;
 int currentTemp = 0;
@@ -96,7 +97,8 @@ void setup() {
     pinMode(stepIn3Pin, OUTPUT);
     pinMode(stepIn4Pin, OUTPUT);
 
-    lcd.begin(16, 2);
+    lcd.init();
+    lcd.backlight();
     Serial.begin(9600);
 }
 
