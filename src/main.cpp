@@ -53,8 +53,8 @@ float thermistorTemperatureC(float thermistorResistance)
 #define stepIn3Pin 4
 #define stepIn4Pin 5
 #define stepControlPin 7
-#define plusStepSpeedPin A5
-#define minusStepSpeedPin A4
+#define plusStepSpeedPin 8
+#define minusStepSpeedPin 9
 
 //stepper coisos
 //model: Nema sla oq
@@ -63,7 +63,7 @@ int stepDelay;
 
 int plusTempBtnState = 0;
 int scaleTempBtnState = 0;
-int minuTempBtnState = 0;
+int minusTempBtnState = 0;
 
 int stepState = 0;
 int stepControl = 0;
@@ -181,6 +181,13 @@ void StepperControl() {
     }
 }
 
+void CurveMaker()
+{
+    //vai verificar a temperatura inicial do hotend, a temperatura máxima que chega, e o tempo que chega, armazenar em um dicionario
+
+    
+}
+
 void ReadTemp() {
     //temperature reading with delay but not with the delay function
     if (millis() - tempReadTime > tempReadDelay) {
@@ -220,15 +227,16 @@ void ReadButtons()
         plusTempBtnState = 0;
     }
 
-    if (digitalRead(minusTempBtnPin) == HIGH && minuTempBtnState == 0) {
-        minuTempBtnState = 1;
+    if (digitalRead(minusTempBtnPin) == HIGH && minusTempBtnState == 0) {
+        Serial.print("APERTO");
+        minusTempBtnState = 1;
         targetTemp -= scale;
         if (targetTemp < 0) {
             targetTemp = 0;
         }
     }
     else if (digitalRead(minusTempBtnPin) == LOW) {
-        minuTempBtnState = 0;
+        minusTempBtnState = 0;
     }
 
     if (digitalRead(plusStepSpeedPin) == HIGH && plusStepSpeedBtnState == 0) {
@@ -279,4 +287,6 @@ void loop() {
     ReadButtons();
     StepperControl();
     TempScreen();
+
+
 }
