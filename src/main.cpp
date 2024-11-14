@@ -1,8 +1,6 @@
 #include <Arduino.h>
 #include <LiquidCrystal_I2C.h>
 
-//pin definition
-
 //temp pins
 const int plusTempBtnPin = A2;
 const int scalePin = A1;
@@ -38,7 +36,6 @@ LiquidCrystal_I2C lcd(0x27, 16, 2);
 int scale = 1;
 int targetTemp = 0;
 
-// Classe Thermistor com construtor atualizado para receber pino
 class Thermistor {
      //model NTC 100k 3950
     //datasheet https://fab.cba.mit.edu/classes/863.18/CBA/people/erik/reference/11_NTC-3950-100K.pdf
@@ -59,17 +56,14 @@ class Thermistor {
         unsigned long readingInterval = 1000;
         unsigned long lastReadTime = 0;
 
-        // Armazenamento de dados
-        struct DataPoint {
-            float time; // Tempo em segundos
-            float temperature;  // Temperatura em graus Celsius
-        };
+        //codigo pra juntar 10 leituras e tirar a media, pra reduzir variação
+        float readings[50];
+        int readingsIndex = 0;
 
-        DataPoint dataLog[180]; // Array de armazenamento
-        int logIndex = 0;       // Índice atual no array de dados
         bool logging = false;    // Estado de logging (iniciado ou pausado)
         int loggingInterval = 1000; // Intervalo de logging em ms
         unsigned long lastLogTime = 0;        // Tempo da última medição
+        unsigned long startTime = 0;          // Tempo de início do logging
 
     public:
         float currentTemp = 0;
@@ -91,9 +85,20 @@ class Thermistor {
         }
 
         void Update() {
-            if (millis() - lastReadTime > readingInterval) {
-                lastReadTime = millis();
-                currentTemp = GetTempC();
+            // if (millis() - lastReadTime > readingInterval) {
+            //     lastReadTime = millis();
+            //     currentTemp = GetTempC();
+            // }
+
+            readings[readingsIndex] = GetTempC();
+            readingsIndex = (readingsIndex + 1) % 50;   
+
+            if (readingsIndex == 0) {
+                float sum = 0;
+                for (int i = 0; i < 50; i++) {
+                    sum += readings[i];
+                }
+                currentTemp = sum / 50;
             }
 
             UpdateLogging();
@@ -104,27 +109,19 @@ class Thermistor {
                 lastLogTime = millis();
                 float temperature = GetTempC();
 
-                // Armazena o ponto de dados no array, com tempo em segundos
-                dataLog[logIndex].time = logIndex;
-                dataLog[logIndex].temperature = temperature;
+                // printa a temperatura no tempo (tempo desde que comecou a logar)
 
-                Serial.print(dataLog[logIndex].time);
-                Serial.print(" s | ");
-                Serial.print(dataLog[logIndex].temperature);
+                Serial.print((millis() - startTime) / 1000);
+                Serial.print("s | ");
+                Serial.print(temperature);
                 Serial.println(" C");
-
-                logIndex++; // Avança para o próximo índice
-                if (logIndex >= 180) 
-                {
-                    StopLogging();
-                }
             }
         }
 
         void StartLogging() {
             logging = true;
-            logIndex = 0; // Reinicia o índice
             lastLogTime = millis(); // Reinicia o contador de tempo
+            startTime = millis(); // Salva o tempo de início
             Serial.println("I");
         }
 
@@ -181,7 +178,7 @@ unsigned long calcStepDelay(int rpm) {
 
 void StepperControl() {
     if (stepControl == 1) {
-        if (millis() - stepSpeedTime > stepDelay) {
+        if (millis() - stepSpeedTime > 10) {
             stepSpeedTime = millis();
             // Controle dos estados do motor de passo
             switch (stepState) {
