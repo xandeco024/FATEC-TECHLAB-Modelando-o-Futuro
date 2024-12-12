@@ -1,19 +1,23 @@
 #include <Arduino.h>
 #include <LiquidCrystal_I2C.h>
 
+#define F_CPU 16000000UL 
+
 //temp pins
-const int plusTempBtnPin = A2;
+const int plusTempBtnPin= A2;
 const int scalePin = A1;
 const int minusTempBtnPin = A0;
+
+const int heaterPin = 9;
 
 //stepper motor pins
 const int stepIn1Pin = 2;
 const int stepIn2Pin = 3;
 const int stepIn3Pin = 4;
 const int stepIn4Pin = 5;
+const int plusStepSpeedPin = 6;
 const int stepControlPin = 7;
-const int plusStepSpeedPin = 8;
-const int minusStepSpeedPin = 9;
+const int minusStepSpeedPin = 8;
 
 //stepper variables
 int stepsPerRotation = 5;
@@ -35,6 +39,40 @@ LiquidCrystal_I2C lcd(0x27, 16, 2);
 
 int scale = 1;
 int targetTemp = 0;
+
+//regulação temperatura
+
+volatile uint16_t sensorValue = 0;
+float temp_sensor = 0;
+
+// Valores do controlador
+float Kp = 43.0949;           // Ganho proporcional (ajuste conforme necessário)
+float Ki = 18.7504;           // Ganho integral (ajuste conforme necessário)
+float Kd = 0.91976;           // Ganho derivativo (ajuste conforme necessário)
+
+float Tensao = 5;
+float cv = 0;
+float cv1 = 0;
+float erro = 0;
+float erro1 = 0;
+float erro2 = 0;
+
+// Valores para ajuste do Arduino
+const int frequenciaPWM = 2000;
+const int frequenciaTimer = 1000;
+const int prescaler = 8; // Ajustar para obter a frequência desejada
+volatile uint16_t valorICR1 = 0;
+volatile uint16_t valorOCR1A = 0;
+float Tm = 1/frequenciaTimer;
+
+float h1 = Tm/2;
+float h2 = 1/Tm;
+
+float b0 = Kp+Ki*h1+Kd*h2;
+float b1 = -Kp+Ki*h1-2*Kd*h2;
+float b2 = Kd*h2;
+
+
 
 class Thermistor {
      //model NTC 100k 3950
@@ -60,24 +98,20 @@ class Thermistor {
         float readings[50];
         int readingsIndex = 0;
 
-        bool logging = false;    // Estado de logging (iniciado ou pausado)
-        int loggingInterval = 1000; // Intervalo de logging em ms
-        unsigned long lastLogTime = 0;        // Tempo da última medição
-        unsigned long startTime = 0;          // Tempo de início do logging
+        // bool logging = false;    // Estado de logging (iniciado ou pausado)
+        // int loggingInterval = 1000; // Intervalo de logging em ms
+        // unsigned long lastLogTime = 0;        // Tempo da última medição
+        // unsigned long startTime = 0;          // Tempo de início do logging
 
     public:
         float currentTemp = 0;
 
         Thermistor(int inputPin) : pin(inputPin) {}
 
-        double GetTempF() {
-            float resistance = resistorResistance * (voltage / (analogRead(pin) * voltage / adcResolution) - 1);
+        double TensionToC(double tension) {
+            float resistance = resistorResistance * (voltage / (tension * voltage / adcResolution) - 1);
             double t = 1 / (1 / kelvin25 + log(resistance / resistance25) / thermistorBeta);
-            return t;
-        }
-
-        double GetTempC() {
-            return GetTempF() - 273.15;
+            return t - 273.15;
         }
 
         void Start() {
@@ -85,12 +119,7 @@ class Thermistor {
         }
 
         void Update() {
-            // if (millis() - lastReadTime > readingInterval) {
-            //     lastReadTime = millis();
-            //     currentTemp = GetTempC();
-            // }
-
-            readings[readingsIndex] = GetTempC();
+            readings[readingsIndex] = analogRead(pin);
             readingsIndex = (readingsIndex + 1) % 50;   
 
             if (readingsIndex == 0) {
@@ -101,40 +130,41 @@ class Thermistor {
                 currentTemp = sum / 50;
             }
 
-            UpdateLogging();
+            // UpdateLogging();
         }
 
-        void UpdateLogging() {
-            if (logging && millis() - lastLogTime > loggingInterval) {
-                lastLogTime = millis();
-                float temperature = GetTempC();
+        // void UpdateLogging() {
+        //     if (logging && millis() - lastLogTime > loggingInterval) {
+        //         lastLogTime = millis();
+        //         float temperature = GetTempC();
 
-                // printa a temperatura no tempo (tempo desde que comecou a logar)
+        //         // printa a temperatura no tempo (tempo desde que comecou a logar)
 
-                Serial.print((millis() - startTime) / 1000);
-                Serial.print("s | ");
-                Serial.print(temperature);
-                Serial.println(" C");
-            }
-        }
+        //         Serial.print((millis() - startTime) / 1000);
+        //         Serial.print("s | ");
+        //         Serial.print(temperature);
+        //         Serial.println(" C");
+        //     }
+        // }
 
-        void StartLogging() {
-            logging = true;
-            lastLogTime = millis(); // Reinicia o contador de tempo
-            startTime = millis(); // Salva o tempo de início
-            Serial.println("I");
-        }
+        // void StartLogging() {
+        //     logging = true;
+        //     lastLogTime = millis(); // Reinicia o contador de tempo
+        //     startTime = millis(); // Salva o tempo de início
+        //     Serial.println("I");
+        // }
 
-        // Parar a medição
-        void StopLogging() {
-            logging = false;
-            Serial.println("P");
-        }
+        // // Parar a medição
+        // void StopLogging() {
+        //     logging = false;
+        //     Serial.println("P");
+        // }
 };
 
 Thermistor thermistor(A3); // Inicializando com o pino adequado
 
 void setup() {
+    Serial.begin(115200);
     thermistor.Start();
 
     pinMode(plusTempBtnPin, INPUT);
@@ -148,19 +178,31 @@ void setup() {
 
     lcd.init();
     lcd.backlight();
-    Serial.begin(9600);
+
+    pinMode(heaterPin, OUTPUT);
+
+    TCCR1A = (1 << WGM11) | (1 << COM1A1); // Modo Fast PWM, 10-bit, OC1B (pino 9)
+    TCCR1B = (1 << WGM12) | (1 << WGM13) | (1 << CS11); // Prescaler de 8
+
+    //TCCR1A = 0b00100010; // COM1A1-COM1A0-COM1B1-COM1B0-X-X-WGM11-WGM10 // Modo Fast PWM, 10-bit, OC1B (pino 9)
+    //TCCR1B = 0b00011010; // ICNC1-ICES1-X-WGM13-WGM12-CS12-CS11-CS10 // Prescaler de 8
+
+    valorICR1 = int((F_CPU/prescaler)/frequenciaPWM-1);
+    ICR1 = valorICR1;
+
+    TIMSK1 |= (1 << OCIE1A); // Habilita interrupção por comparação A
 }
 
 void TempScreen(float currentTemp, float targetTemp, int scale, int stepRPM) {
     lcd.setCursor(0, 0);
     lcd.print("C:");
-    lcd.print((int)currentTemp);
-    lcd.print("C");
+    lcd.print(currentTemp);
+    // lcd.print("C");
 
     lcd.setCursor(0, 1);
     lcd.print("T:");
-    lcd.print(int(targetTemp));
-    lcd.print("C");
+    lcd.print(targetTemp);
+    // lcd.print("C");
 
     lcd.setCursor(8, 0);
     lcd.print("S:");
@@ -237,8 +279,8 @@ void ReadButtons() {
         stepControlBtnState = 1;
         stepControl = !stepControl;
 
-        if (stepControl) thermistor.StartLogging();
-        else thermistor.StopLogging();
+        // if (stepControl) thermistor.StartLogging();
+        // else thermistor.StopLogging();
 
     } else if (digitalRead(stepControlPin) == LOW) {
         stepControlBtnState = 0;
@@ -248,6 +290,41 @@ void ReadButtons() {
 void loop() {
     ReadButtons();
     thermistor.Update();
-    TempScreen(thermistor.currentTemp, targetTemp, scale, stepRPM);
+    TempScreen(analogRead(A3), targetTemp, scale, stepRPM);
     StepperControl();
+
+    Serial.print(targetTemp);
+    Serial.print("      ");
+    Serial.print(temp_sensor);
+    Serial.print("      ");
+    Serial.print(cv);
+    Serial.print("      ");
+    Serial.println(erro);
+}
+
+ISR(TIMER1_COMPA_vect){ //TIMER1_COMPA_vect) {
+	//----- Cálculo do erro -----
+
+    sensorValue = analogRead(A3);
+    temp_sensor = sensorValue * Tensao / 1024.0;
+
+	erro = targetTemp - temp_sensor;
+	
+	//----- Equação de diferenças ------
+	//cv = cv1 + (Kp + Kd/Tm)*erro + (-Kp + Ki*Tm - 2*Kd/Tm)*erro1 + (Kd/Tm)*erro2;
+    //cv = cv1 + b0*erro + b1*erro1 + b2*erro2;
+
+    //cv = cv1 + 2034.2445 * erro - -4068.2414 * erro1 + 2034 * erro2; 
+    // cv = cv1 + 2034.2445 * erro - -4068.2414 * erro1 + 0 * erro2; 
+    cv = cv1 + 1.5 * erro - 1.44356 * erro1 + 0.01 * erro2;
+
+    if (cv > Tensao) cv = Tensao;
+    if (cv < 0) cv = 0;
+
+    cv1 = cv;
+	erro2 = erro1;
+	erro1 = erro;
+
+    valorOCR1A = cv*valorICR1/Tensao;
+    OCR1A = valorOCR1A; //map(cv, 0, 250, 0, valorICR1); // Atualiza o duty cycle no OCR1A
 }
