@@ -45,10 +45,21 @@ int targetTemp = 0;
 volatile uint16_t sensorValue = 0;
 float temp_sensor = 0;
 
+const int frequenciaTimer = 1000;
+float Tm = 1/frequenciaTimer;
+
 // Valores do controlador
-float Kp = 43.0949;           // Ganho proporcional (ajuste conforme necessário)
-float Ki = 18.7504;           // Ganho integral (ajuste conforme necessário)
-float Kd = 0.91976;           // Ganho derivativo (ajuste conforme necessário)
+float Kp = 0.23115;           // Ganho proporcional (ajuste conforme necessário)
+float Ki = 0.0024176;           // Ganho integral (ajuste conforme necessário)
+float Kd = 1.8869;           // Ganho derivativo (ajuste conforme necessário)
+
+// float b0 = Kp + Kd/Tm;
+// float b1 = -Kp + Ki*Tm - 2*Kd/Tm;
+// float b2 = Kd/Tm;
+
+float b0 = 1887.1312;
+float b1 = -3774.0311;
+float b2 = 1886.9;
 
 float Tensao = 5;
 float cv = 0;
@@ -59,20 +70,9 @@ float erro2 = 0;
 
 // Valores para ajuste do Arduino
 const int frequenciaPWM = 2000;
-const int frequenciaTimer = 1000;
 const int prescaler = 8; // Ajustar para obter a frequência desejada
 volatile uint16_t valorICR1 = 0;
 volatile uint16_t valorOCR1A = 0;
-float Tm = 1/frequenciaTimer;
-
-float h1 = Tm/2;
-float h2 = 1/Tm;
-
-float b0 = Kp+Ki*h1+Kd*h2;
-float b1 = -Kp+Ki*h1-2*Kd*h2;
-float b2 = Kd*h2;
-
-
 
 class Thermistor {
      //model NTC 100k 3950
@@ -109,9 +109,16 @@ class Thermistor {
         Thermistor(int inputPin) : pin(inputPin) {}
 
         double TensionToC(double tension) {
-            float resistance = resistorResistance * (voltage / (tension * voltage / adcResolution) - 1);
+            float resistance = resistorResistance * (voltage / tension - 1);
             double t = 1 / (1 / kelvin25 + log(resistance / resistance25) / thermistorBeta);
             return t - 273.15;
+        }
+
+        double CToTension(double temperature) {
+            double tKelvin = temperature + 273.15; // Converte para Kelvin
+            double resistance = resistance25 * exp(thermistorBeta * (1 / tKelvin - 1 / kelvin25));
+            double tension = voltage / (1 + resistance / resistorResistance);
+            return tension;
         }
 
         void Start() {
@@ -196,13 +203,12 @@ void setup() {
 void TempScreen(float currentTemp, float targetTemp, int scale, int stepRPM) {
     lcd.setCursor(0, 0);
     lcd.print("C:");
-    lcd.print(currentTemp);
-    // lcd.print("C");
+    lcd.print(int(thermistor.TensionToC(currentTemp)));
+    lcd.print(" ");
 
     lcd.setCursor(0, 1);
     lcd.print("T:");
-    lcd.print(targetTemp);
-    // lcd.print("C");
+    lcd.print(thermistor.CToTension(currentTemp));
 
     lcd.setCursor(8, 0);
     lcd.print("S:");
@@ -290,7 +296,7 @@ void ReadButtons() {
 void loop() {
     ReadButtons();
     thermistor.Update();
-    TempScreen(analogRead(A3), targetTemp, scale, stepRPM);
+    TempScreen(temp_sensor, targetTemp, scale, stepRPM);
     StepperControl();
 
     Serial.print(targetTemp);
@@ -310,13 +316,8 @@ ISR(TIMER1_COMPA_vect){ //TIMER1_COMPA_vect) {
 
 	erro = targetTemp - temp_sensor;
 	
-	//----- Equação de diferenças ------
-	//cv = cv1 + (Kp + Kd/Tm)*erro + (-Kp + Ki*Tm - 2*Kd/Tm)*erro1 + (Kd/Tm)*erro2;
-    //cv = cv1 + b0*erro + b1*erro1 + b2*erro2;
-
-    //cv = cv1 + 2034.2445 * erro - -4068.2414 * erro1 + 2034 * erro2; 
-    // cv = cv1 + 2034.2445 * erro - -4068.2414 * erro1 + 0 * erro2; 
-    cv = cv1 + 1.5 * erro - 1.44356 * erro1 + 0.01 * erro2;
+	// cv = cv1 + (Kp + Kd/Tm)*erro + (-Kp + Ki*Tm - 2*Kd/Tm)*erro1 + (Kd/Tm)*erro2;
+    cv = cv1 + b0*erro + b1*erro1 + b2*erro2;
 
     if (cv > Tensao) cv = Tensao;
     if (cv < 0) cv = 0;
