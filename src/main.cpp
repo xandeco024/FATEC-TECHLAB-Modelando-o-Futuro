@@ -8,16 +8,16 @@ const int plusTempBtnPin= A2;
 const int scalePin = A1;
 const int minusTempBtnPin = A0;
 
-const int heaterPin = 9;
+//const int heaterPin = 5; //antes 9
 
 //stepper motor pins
 const int stepIn1Pin = 2;
 const int stepIn2Pin = 3;
 const int stepIn3Pin = 4;
-const int stepIn4Pin = 5;
-const int plusStepSpeedPin = 6;
-const int stepControlPin = 7;
-const int minusStepSpeedPin = 8;
+const int stepIn4Pin = 6;
+const int plusStepSpeedPin = 7;
+const int stepControlPin = 8;
+const int minusStepSpeedPin = 9;
 
 //stepper variables
 int stepsPerRotation = 5;
@@ -38,141 +38,66 @@ int stepControlBtnState = 0;
 LiquidCrystal_I2C lcd(0x27, 16, 2);
 
 int scale = 1;
-int targetTemp = 0;
 
-//regulação temperatura
+//model NTC 100k 3950
+//datasheet https://fab.cba.mit.edu/classes/863.18/CBA/people/erik/reference/11_NTC-3950-100K.pdf
+// Constantes do termistor
+const float T1 = 273.15;    // Temperatura 0º C em Kelvin
+const float T2 = 373.15;    // Temperatura 100º C em Kelvin
+const float RT1 = 32724.0;  // Resistência do termistor a 0ºC
+const float RT2 = 671.0;    // Resistência do termistor a 100ºC
+const float voltage = 5.0;  // Tensão de referência do ADC
+const float adcResolution = 1023.0; // Resolução do ADC
+const float resistorResistance = 10000.0; // Resistência do resistor em série (10k ohms)
+const float kelvin25 = 298.15;  // 25ºC em Kelvin
+const float resistance25 = 100000.0;    // Resistência do termistor a 25ºC
 
-volatile uint16_t sensorValue = 0;
-float temp_sensor = 0;
+int PWM_pin = 5; //Pin for PWM signal to the MOSFET driver (the BJT npn with pullup)
+int but1 = 7;
+int EN = 2;
+int STEP = 3;
+int DIR = 4;
+int LED = 13;
 
-const int frequenciaTimer = 1000;
-float Tm = 1/frequenciaTimer;
+//Variables
+float targetTemp = 0;            //Default temperature setpoint. Leave it 0 and control it with rotary encoder
+float currentTemp = 0.0;
+float PID_error = 0;
+float previous_error = 0;
+float elapsedTime, Time, timePrev;
+float PID_value = 0;
+float last_set_temperature = 0;
+int max_PWM = 255;
 
-// Valores do controlador
-float Kp = 0.23115;           // Ganho proporcional (ajuste conforme necessário)
-float Ki = 0.0024176;           // Ganho integral (ajuste conforme necessário)
-float Kd = 1.8869;           // Ganho derivativo (ajuste conforme necessário)
+//PID constants
+//////////////////////////////////////////////////////////
+int kp = 90;   int ki = 30;   int kd = 80;
+//////////////////////////////////////////////////////////
 
-// float b0 = Kp + Kd/Tm;
-// float b1 = -Kp + Ki*Tm - 2*Kd/Tm;
-// float b2 = Kd/Tm;
+int PID_p = 0;    int PID_i = 0;    int PID_d = 0;
+float last_kp = 0;
+float last_ki = 0;
+float last_kd = 0;
 
-float b0 = 1887.1312;
-float b1 = -3774.0311;
-float b2 = 1886.9;
+int PID_values_fixed =0;
 
-float Tensao = 5;
-float cv = 0;
-float cv1 = 0;
-float erro = 0;
-float erro1 = 0;
-float erro2 = 0;
+//prettify :D
 
-// Valores para ajuste do Arduino
-const int frequenciaPWM = 2000;
-const int prescaler = 8; // Ajustar para obter a frequência desejada
-volatile uint16_t valorICR1 = 0;
-volatile uint16_t valorOCR1A = 0;
-
-class Thermistor {
-     //model NTC 100k 3950
-    //datasheet https://fab.cba.mit.edu/classes/863.18/CBA/people/erik/reference/11_NTC-3950-100K.pdf
-
-    private: 
-        int pin;
-        const float T1 = 273.15;  // Temperatura 0º C em Kelvin
-        const float T2 = 373.15;  // Temperatura 100º C em Kelvin
-        const float RT1 = 32724.0;  // Resistência do termistor a 0ºC
-        const float RT2 = 671.0;  // Resistência do termistor a 100ºC
-        const float voltage = 5.0;
-        const float adcResolution = 1024.0;
-        const float resistorResistance = 10000.0;  // Resistência do resistor em série (10k ohms)
-        const float thermistorBeta = log(RT1 / RT2) / (1 / T1 - 1 / T2);
-        const float kelvin25 = 298.15;  // 25ºC em Kelvin
-        const float resistance25 = 100000.0;  // Resistência do termistor a 25ºC
-
-        unsigned long readingInterval = 1000;
-        unsigned long lastReadTime = 0;
-
-        //codigo pra juntar 10 leituras e tirar a media, pra reduzir variação
-        float readings[50];
-        int readingsIndex = 0;
-
-        // bool logging = false;    // Estado de logging (iniciado ou pausado)
-        // int loggingInterval = 1000; // Intervalo de logging em ms
-        // unsigned long lastLogTime = 0;        // Tempo da última medição
-        // unsigned long startTime = 0;          // Tempo de início do logging
-
-    public:
-        float currentTemp = 0;
-
-        Thermistor(int inputPin) : pin(inputPin) {}
-
-        double TensionToC(double tension) {
-            float resistance = resistorResistance * (voltage / tension - 1);
-            double t = 1 / (1 / kelvin25 + log(resistance / resistance25) / thermistorBeta);
-            return t - 273.15;
-        }
-
-        double CToTension(double temperature) {
-            double tKelvin = temperature + 273.15; // Converte para Kelvin
-            double resistance = resistance25 * exp(thermistorBeta * (1 / tKelvin - 1 / kelvin25));
-            double tension = voltage / (1 + resistance / resistorResistance);
-            return tension;
-        }
-
-        void Start() {
-            pinMode(pin, INPUT);
-        }
-
-        void Update() {
-            readings[readingsIndex] = analogRead(pin);
-            readingsIndex = (readingsIndex + 1) % 50;   
-
-            if (readingsIndex == 0) {
-                float sum = 0;
-                for (int i = 0; i < 50; i++) {
-                    sum += readings[i];
-                }
-                currentTemp = sum / 50;
-            }
-
-            // UpdateLogging();
-        }
-
-        // void UpdateLogging() {
-        //     if (logging && millis() - lastLogTime > loggingInterval) {
-        //         lastLogTime = millis();
-        //         float temperature = GetTempC();
-
-        //         // printa a temperatura no tempo (tempo desde que comecou a logar)
-
-        //         Serial.print((millis() - startTime) / 1000);
-        //         Serial.print("s | ");
-        //         Serial.print(temperature);
-        //         Serial.println(" C");
-        //     }
-        // }
-
-        // void StartLogging() {
-        //     logging = true;
-        //     lastLogTime = millis(); // Reinicia o contador de tempo
-        //     startTime = millis(); // Salva o tempo de início
-        //     Serial.println("I");
-        // }
-
-        // // Parar a medição
-        // void StopLogging() {
-        //     logging = false;
-        //     Serial.println("P");
-        // }
+byte celsiusChar[] = {
+    B00001,
+    B01100,
+    B10010,
+    B10000,
+    B10000,
+    B10010,
+    B01100,
+    B00000
 };
-
-Thermistor thermistor(A3); // Inicializando com o pino adequado
 
 void setup() {
     Serial.begin(115200);
-    thermistor.Start();
+
+    pinMode(A3, INPUT);
 
     pinMode(plusTempBtnPin, INPUT);
     pinMode(scalePin, INPUT);
@@ -184,39 +109,44 @@ void setup() {
     pinMode(stepIn4Pin, OUTPUT);
 
     lcd.init();
+    lcd.createChar(0, celsiusChar);
     lcd.backlight();
 
-    pinMode(heaterPin, OUTPUT);
+    pinMode(PWM_pin, OUTPUT);
 
-    TCCR1A = (1 << WGM11) | (1 << COM1A1); // Modo Fast PWM, 10-bit, OC1B (pino 9)
-    TCCR1B = (1 << WGM12) | (1 << WGM13) | (1 << CS11); // Prescaler de 8
+    TCCR0B = TCCR0B & B11111000 | B00000010;    // D5 adn D6 PWM frequency of 7812.50 Hz
+    Time = millis();
 
-    //TCCR1A = 0b00100010; // COM1A1-COM1A0-COM1B1-COM1B0-X-X-WGM11-WGM10 // Modo Fast PWM, 10-bit, OC1B (pino 9)
-    //TCCR1B = 0b00011010; // ICNC1-ICES1-X-WGM13-WGM12-CS12-CS11-CS10 // Prescaler de 8
-
-    valorICR1 = int((F_CPU/prescaler)/frequenciaPWM-1);
-    ICR1 = valorICR1;
-
-    TIMSK1 |= (1 << OCIE1A); // Habilita interrupção por comparação A
+    TCCR1A = 0;             //Reset entire TCCR1A register
+    TCCR1B = 0;             //Reset entire TCCR1B register
+    TCCR1A |= B00000010;    //   /8
+    TCNT1 = 0;              //Reset Timer 1 value to 0
 }
 
-void TempScreen(float currentTemp, float targetTemp, int scale, int stepRPM) {
+void TempScreen() {
+    char tempBuffer[6]; // Buffer to hold formatted temperature (including null terminator)
+    sprintf(tempBuffer, "%3d", int(currentTemp)); // Format the integer with leading spaces
+
     lcd.setCursor(0, 0);
     lcd.print("C:");
-    lcd.print(int(thermistor.TensionToC(currentTemp)));
-    lcd.print(" ");
+    lcd.print(tempBuffer);
+    lcd.write(byte(0));
 
     lcd.setCursor(0, 1);
     lcd.print("T:");
-    lcd.print(thermistor.CToTension(currentTemp));
+    sprintf(tempBuffer, "%3d", int(targetTemp)); // Format targetTemp the same way
+    lcd.print(tempBuffer);
+    lcd.write(byte(0));
 
     lcd.setCursor(8, 0);
     lcd.print("S:");
-    lcd.print(scale);
+    sprintf(tempBuffer, "%3d", scale); // Format scale the same way
+    lcd.print(tempBuffer);
 
     lcd.setCursor(8, 1);
     lcd.print("RPM:");
-    lcd.print(int(stepRPM));
+    sprintf(tempBuffer, "%3d", stepRPM); // Format stepRPM the same way
+    lcd.print(tempBuffer);
 }
 
 unsigned long calcStepDelay(int rpm) {
@@ -250,7 +180,8 @@ void ReadButtons() {
     if (digitalRead(plusTempBtnPin) == HIGH && plusTempBtnState == 0) {
         plusTempBtnState = 1;
         targetTemp += scale;
-        targetTemp = min(targetTemp, 999);
+        targetTemp = min(targetTemp, 400);
+        Serial.println("+");
     } else if (digitalRead(plusTempBtnPin) == LOW) {
         plusTempBtnState = 0;
     }
@@ -259,6 +190,7 @@ void ReadButtons() {
         minusTempBtnState = 1;
         targetTemp -= scale;
         targetTemp = max(targetTemp, 0);
+        Serial.println("-");
     } else if (digitalRead(minusTempBtnPin) == LOW) {
         minusTempBtnState = 0;
     }
@@ -293,39 +225,75 @@ void ReadButtons() {
     }
 }
 
-void loop() {
-    ReadButtons();
-    thermistor.Update();
-    TempScreen(temp_sensor, targetTemp, scale, stepRPM);
-    StepperControl();
+void ReadTemp() {
+    int numReadings = 50; // Number of readings to average
+    float totalTemp = 0.0; // Variable to store the sum of all readings
 
-    Serial.print(targetTemp);
-    Serial.print("      ");
-    Serial.print(temp_sensor);
-    Serial.print("      ");
-    Serial.print(cv);
-    Serial.print("      ");
-    Serial.println(erro);
+    for (int i = 0; i < numReadings; i++) {
+        int read = analogRead(A3);
+
+        // Calculate the Beta value of the thermistor
+        float beta = log(RT1 / RT2) / (1 / T1 - 1 / T2);
+
+        // Calculate the thermistor resistance based on the ADC reading
+        float thermistorResistance = resistorResistance * (voltage / (read * voltage / adcResolution) - 1);
+
+        // Calculate the temperature in Kelvin based on the thermistor resistance
+        double t = 1 / (1 / kelvin25 + log(thermistorResistance / resistance25) / beta);
+
+        // Convert from Kelvin to Celsius and add to the total
+        totalTemp += (t - 273.15);
+    }
+
+    // Calculate the average temperature
+    currentTemp = totalTemp / numReadings;
 }
 
-ISR(TIMER1_COMPA_vect){ //TIMER1_COMPA_vect) {
-	//----- Cálculo do erro -----
+void loop() {
+    ReadButtons();
+    StepperControl();
+    ReadTemp();
+    TempScreen();
 
-    sensorValue = analogRead(A3);
-    temp_sensor = sensorValue * Tensao / 1024.0;
+    //Next we calculate the error between the setpoint and the real value
+    PID_error = targetTemp - currentTemp + 6;
+    //Calculate the P value
+    PID_p = 0.01*kp * PID_error;
+    //Calculate the I value in a range on +-6
+    PID_i = 0.01*PID_i + (ki * PID_error);
+    
 
-	erro = targetTemp - temp_sensor;
-	
-	// cv = cv1 + (Kp + Kd/Tm)*erro + (-Kp + Ki*Tm - 2*Kd/Tm)*erro1 + (Kd/Tm)*erro2;
-    cv = cv1 + b0*erro + b1*erro1 + b2*erro2;
+    //For derivative we need real time to calculate speed change rate
+    timePrev = Time;                            // the previous time is stored before the actual time read
+    Time = millis();                            // actual time read
+    elapsedTime = (Time - timePrev) / 1000; 
+    //Now we can calculate the D calue
+    PID_d = 0.01*kd*((PID_error - previous_error)/elapsedTime);
+    //Final total PID value is the sum of P + I + D
+    PID_value = PID_p + PID_i + PID_d;
 
-    if (cv > Tensao) cv = Tensao;
-    if (cv < 0) cv = 0;
+    
+    //We define PWM range between 0 and 255
+    if(PID_value < 0){
+        PID_value = 0;
+    }
+    if(PID_value > max_PWM){
+        PID_value = max_PWM;
+    }
+    
+    //Now we can write the PWM signal to the mosfet on digital pin D5
+    analogWrite(PWM_pin,PID_value);
+    previous_error = PID_error;     //Remember to store the previous error for next loop.
+    
+    Serial.print(targetTemp);
+    Serial.print("      ");
+    Serial.print(currentTemp);
+    Serial.print("      ");
+    Serial.print(PID_value);
+    Serial.print("      ");
+    Serial.println(PID_error);
+}
 
-    cv1 = cv;
-	erro2 = erro1;
-	erro1 = erro;
-
-    valorOCR1A = cv*valorICR1/Tensao;
-    OCR1A = valorOCR1A; //map(cv, 0, 250, 0, valorICR1); // Atualiza o duty cycle no OCR1A
+ISR(TIMER1_COMPA_vect){
+    TCNT1  = 0;                  //First, set the timer back to 0 so it resets for next interrupt
 }

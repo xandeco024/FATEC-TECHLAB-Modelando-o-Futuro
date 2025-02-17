@@ -39,3 +39,16 @@
     Funcionalidades:
         
         - rodar.
+
+
+FALTA:
+
+plus, minus, change menu, scale
+pot scale change menu emergency
+
+-estabilizar temperatura DONE
+-controle de velocidade do motor
+-fixar melhor HoTEND
+-cortar garrafa
+
+-GERAR FILAMENTO!
