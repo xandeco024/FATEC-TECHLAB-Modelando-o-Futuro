@@ -3,37 +3,33 @@
 
 #define F_CPU 16000000UL 
 
-//temp pins
-const int plusTempBtnPin= A2;
-const int scalePin = A1;
-const int minusTempBtnPin = A0;
-
-//const int heaterPin = 5; //antes 9
+//new controls
+const int potPin = A1;
+int potValue = 0;
+const int togglePotPin = 11;
+int togglePotState = 0;
+const int modifyBtnPin = 10;
+int modifyBtnState = 0;
+const int menuBtnPin = 9;
+int menuBtnState = 0;
+int menu = 0;
+const int toggleBtnPin = 8;
+int toggleBtnState = 0;
 
 //stepper motor pins
 const int stepIn1Pin = 2;
 const int stepIn2Pin = 3;
 const int stepIn3Pin = 4;
 const int stepIn4Pin = 6;
-const int plusStepSpeedPin = 7;
-const int stepControlPin = 8;
-const int minusStepSpeedPin = 9;
 
 //stepper variables
 int stepsPerRotation = 5;
 int stepDelay = 200; // Ajuste o valor para um delay adequado ao motor
 
-int plusTempBtnState = 0;
-int scaleTempBtnState = 0;
-int minusTempBtnState = 0;
-
 int stepState = 0;
 int stepControl = 0;
 int stepRPM = 0;
 long stepSpeedTime = 0;
-int plusStepSpeedBtnState = 0;
-int minusStepSpeedBtnState = 0;
-int stepControlBtnState = 0;
 
 LiquidCrystal_I2C lcd(0x27, 16, 2);
 
@@ -99,9 +95,11 @@ void setup() {
 
     pinMode(A3, INPUT);
 
-    pinMode(plusTempBtnPin, INPUT);
-    pinMode(scalePin, INPUT);
-    pinMode(minusTempBtnPin, INPUT);
+    pinMode(potPin, INPUT);
+    pinMode(togglePotPin, OUTPUT);
+    pinMode(modifyBtnPin, INPUT);
+    pinMode(menuBtnPin, INPUT);
+    pinMode(toggleBtnPin, INPUT);
 
     pinMode(stepIn1Pin, OUTPUT);
     pinMode(stepIn2Pin, OUTPUT);
@@ -123,32 +121,6 @@ void setup() {
     TCNT1 = 0;              //Reset Timer 1 value to 0
 }
 
-void TempScreen() {
-    char tempBuffer[6]; // Buffer to hold formatted temperature (including null terminator)
-    sprintf(tempBuffer, "%3d", int(currentTemp)); // Format the integer with leading spaces
-
-    lcd.setCursor(0, 0);
-    lcd.print("C:");
-    lcd.print(tempBuffer);
-    lcd.write(byte(0));
-
-    lcd.setCursor(0, 1);
-    lcd.print("T:");
-    sprintf(tempBuffer, "%3d", int(targetTemp)); // Format targetTemp the same way
-    lcd.print(tempBuffer);
-    lcd.write(byte(0));
-
-    lcd.setCursor(8, 0);
-    lcd.print("S:");
-    sprintf(tempBuffer, "%3d", scale); // Format scale the same way
-    lcd.print(tempBuffer);
-
-    lcd.setCursor(8, 1);
-    lcd.print("RPM:");
-    sprintf(tempBuffer, "%3d", stepRPM); // Format stepRPM the same way
-    lcd.print(tempBuffer);
-}
-
 unsigned long calcStepDelay(int rpm) {
     float SPS = rpm * stepsPerRotation / 60.0;
     return SPS > 0 ? 1 / SPS * 1000.0 : 1000;
@@ -166,62 +138,6 @@ void StepperControl() {
                 case 3: digitalWrite(stepIn1Pin, LOW); digitalWrite(stepIn2Pin, LOW); digitalWrite(stepIn3Pin, LOW); digitalWrite(stepIn4Pin, HIGH); stepState = 0; break;
             }
         }
-    }
-}
-
-void ReadButtons() {
-    if (digitalRead(scalePin) == HIGH && scaleTempBtnState == 0) {
-        scaleTempBtnState = 1;
-        scale = (scale == 1) ? 10 : (scale == 10) ? 100 : 1;
-    } else if (digitalRead(scalePin) == LOW) {
-        scaleTempBtnState = 0;
-    }
-
-    if (digitalRead(plusTempBtnPin) == HIGH && plusTempBtnState == 0) {
-        plusTempBtnState = 1;
-        targetTemp += scale;
-        targetTemp = min(targetTemp, 400);
-        Serial.println("+");
-    } else if (digitalRead(plusTempBtnPin) == LOW) {
-        plusTempBtnState = 0;
-    }
-
-    if (digitalRead(minusTempBtnPin) == HIGH && minusTempBtnState == 0) {
-        minusTempBtnState = 1;
-        targetTemp -= scale;
-        targetTemp = max(targetTemp, 0);
-        Serial.println("-");
-    } else if (digitalRead(minusTempBtnPin) == LOW) {
-        minusTempBtnState = 0;
-    }
-
-    if (digitalRead(plusStepSpeedPin) == HIGH && plusStepSpeedBtnState == 0) {
-        plusStepSpeedBtnState = 1;
-        stepRPM += scale;
-        stepRPM = min(stepRPM, 999);
-        stepDelay = calcStepDelay(stepRPM);
-    } else if (digitalRead(plusStepSpeedPin) == LOW) {
-        plusStepSpeedBtnState = 0;
-    }
-
-    if (digitalRead(minusStepSpeedPin) == HIGH && minusStepSpeedBtnState == 0) {
-        minusStepSpeedBtnState = 1;
-        stepRPM -= scale;
-        stepRPM = max(stepRPM, 0);
-        stepDelay = calcStepDelay(stepRPM);
-    } else if (digitalRead(minusStepSpeedPin) == LOW) {
-        minusStepSpeedBtnState = 0;
-    }
-
-    if (digitalRead(stepControlPin) == HIGH && stepControlBtnState == 0) {
-        stepControlBtnState = 1;
-        stepControl = !stepControl;
-
-        // if (stepControl) thermistor.StartLogging();
-        // else thermistor.StopLogging();
-
-    } else if (digitalRead(stepControlPin) == LOW) {
-        stepControlBtnState = 0;
     }
 }
 
@@ -250,10 +166,88 @@ void ReadTemp() {
 }
 
 void loop() {
-    ReadButtons();
     StepperControl();
     ReadTemp();
-    TempScreen();
+
+    if (digitalRead(modifyBtnPin) == HIGH && modifyBtnState == 0) {
+        modifyBtnState = 1;
+        Serial.println("Modify");
+        if (togglePotState == 0) {
+            togglePotState = 1;
+        } else {
+            togglePotState = 0;
+        }
+    } else if (digitalRead(modifyBtnPin) == LOW) {
+        modifyBtnState = 0;
+    }
+
+    if (togglePotState == 1) {
+        digitalWrite(togglePotPin, HIGH);
+        potValue = constrain(analogRead(potPin), 10, 1010);
+        Serial.println(potValue);
+    } else {
+        digitalWrite(togglePotPin, LOW);
+    }
+
+    if (digitalRead(menuBtnPin) == HIGH && menuBtnState == 0) {
+        menuBtnState = 1;
+        Serial.println("Menu");
+        menu = (menu + 1) % 3;
+        lcd.clear();
+        togglePotState = 0;
+    } else if (digitalRead(menuBtnPin) == LOW) {
+        menuBtnState = 0;
+    }
+
+    if (digitalRead(toggleBtnPin) == HIGH && toggleBtnState == 0) {
+        toggleBtnState = 1;
+        Serial.println("Toggle");
+    } else if (digitalRead(toggleBtnPin) == LOW) {
+        toggleBtnState = 0;
+    }
+
+    if (menu == 0) {
+        lcd.setCursor(0, 0);
+        lcd.print("Modelando o");
+        lcd.setCursor(0, 1);
+        lcd.print("Futuro");
+
+    } else if (menu == 1) {
+        if (togglePotState == 1) {
+            targetTemp = map(potValue, 10, 1010, 0, 300);
+            targetTemp = constrain(targetTemp, 0, 300);
+        }
+
+        char tempBuffer[6]; // Buffer to hold formatted temperature (including null terminator)
+        sprintf(tempBuffer, "%3d", int(currentTemp)); // Format the integer with leading spaces
+
+        lcd.setCursor(0, 0);
+        lcd.print("Temp: ");
+        lcd.print(tempBuffer);
+        lcd.write(byte(0));
+
+        sprintf(tempBuffer, "%3d", int(targetTemp)); // Format targetTemp the same way
+
+        lcd.setCursor(0, 1);
+        lcd.print("Target: ");
+        lcd.print(tempBuffer);
+        lcd.write(byte(0));
+
+    } else if (menu == 2) {
+        if (togglePotState == 1) {
+            stepRPM = map(potValue, 10, 1010, 0, 999);
+            stepRPM = constrain(stepRPM, 0, 999);
+            stepDelay = calcStepDelay(stepRPM);
+        }
+
+        lcd.setCursor(0, 0);
+        lcd.print("RPM: ");
+        lcd.print(stepRPM);
+
+        lcd.setCursor(0, 1);
+        lcd.print("Delay: ");
+        lcd.print(stepDelay);
+    }
 
     //Next we calculate the error between the setpoint and the real value
     PID_error = targetTemp - currentTemp + 6;
@@ -285,13 +279,13 @@ void loop() {
     analogWrite(PWM_pin,PID_value);
     previous_error = PID_error;     //Remember to store the previous error for next loop.
     
-    Serial.print(targetTemp);
-    Serial.print("      ");
-    Serial.print(currentTemp);
-    Serial.print("      ");
-    Serial.print(PID_value);
-    Serial.print("      ");
-    Serial.println(PID_error);
+    // Serial.print(targetTemp);
+    // Serial.print("      ");
+    // Serial.print(currentTemp);
+    // Serial.print("      ");
+    // Serial.print(PID_value);
+    // Serial.print("      ");
+    // Serial.println(PID_error);
 }
 
 ISR(TIMER1_COMPA_vect){

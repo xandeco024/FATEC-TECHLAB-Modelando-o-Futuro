@@ -44,7 +44,7 @@
 FALTA:
 
 plus, minus, change menu, scale
-pot scale change menu emergency
+pot - mod - change - emergency
 
 -estabilizar temperatura DONE
 -controle de velocidade do motor
