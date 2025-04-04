@@ -17,18 +17,16 @@ const int toggleBtnPin = 8;
 int toggleBtnState = 0;
 
 //stepper motor pins
-const int stepIn1Pin = 2;
-const int stepIn2Pin = 3;
-const int stepIn3Pin = 4;
-const int stepIn4Pin = 6;
+const int dirPin = 6;
+const int stepPin = 7;
 
 //stepper variables
-int stepsPerRotation = 5;
+const int stepsPerRevolution = 200;
 int stepDelay = 200; // Ajuste o valor para um delay adequado ao motor
 
 int stepState = 0;
 int stepControl = 0;
-int stepRPM = 0;
+int stepSpeed = 0;
 long stepSpeedTime = 0;
 
 LiquidCrystal_I2C lcd(0x27, 16, 2);
@@ -101,10 +99,10 @@ void setup() {
     pinMode(menuBtnPin, INPUT);
     pinMode(toggleBtnPin, INPUT);
 
-    pinMode(stepIn1Pin, OUTPUT);
-    pinMode(stepIn2Pin, OUTPUT);
-    pinMode(stepIn3Pin, OUTPUT);
-    pinMode(stepIn4Pin, OUTPUT);
+    pinMode(stepPin, OUTPUT);
+    pinMode(dirPin, OUTPUT);
+    digitalWrite(dirPin, HIGH); // Set the direction of the stepper motor
+    digitalWrite(stepPin, LOW); // Ensure the step pin is low initially
 
     lcd.init();
     lcd.createChar(0, celsiusChar);
@@ -122,22 +120,15 @@ void setup() {
 }
 
 unsigned long calcStepDelay(int rpm) {
-    float SPS = rpm * stepsPerRotation / 60.0;
-    return SPS > 0 ? 1 / SPS * 1000.0 : 1000;
+    return  (60L * 1000L) / (stepsPerRevolution * rpm);
 }
 
 void StepperControl() {
     if (stepControl == 1) {
-        if (millis() - stepSpeedTime > 10) {
-            stepSpeedTime = millis();
-            // Controle dos estados do motor de passo
-            switch (stepState) {
-                case 0: digitalWrite(stepIn1Pin, HIGH); digitalWrite(stepIn2Pin, LOW); digitalWrite(stepIn3Pin, LOW); digitalWrite(stepIn4Pin, LOW); stepState = 1; break;
-                case 1: digitalWrite(stepIn1Pin, LOW); digitalWrite(stepIn2Pin, HIGH); digitalWrite(stepIn3Pin, LOW); digitalWrite(stepIn4Pin, LOW); stepState = 2; break;
-                case 2: digitalWrite(stepIn1Pin, LOW); digitalWrite(stepIn2Pin, LOW); digitalWrite(stepIn3Pin, HIGH); digitalWrite(stepIn4Pin, LOW); stepState = 3; break;
-                case 3: digitalWrite(stepIn1Pin, LOW); digitalWrite(stepIn2Pin, LOW); digitalWrite(stepIn3Pin, LOW); digitalWrite(stepIn4Pin, HIGH); stepState = 0; break;
-            }
-        }
+        digitalWrite(stepPin, HIGH); // Set the step pin high
+        delayMicroseconds(stepDelay); // Wait for the specified delay
+        digitalWrite(stepPin, LOW); // Set the step pin low
+        delayMicroseconds(stepDelay); // Wait for the specified delay
     }
 }
 
@@ -165,6 +156,15 @@ void ReadTemp() {
     currentTemp = totalTemp / numReadings;
 }
 
+int ReadSmooth(int pin){
+    int val = 0;
+    for(int i = 0; i < 10; i++){
+        val += analogRead(pin);
+        delay(10);
+    }
+    return val/10;
+}
+
 void loop() {
     StepperControl();
     ReadTemp();
@@ -183,8 +183,8 @@ void loop() {
 
     if (togglePotState == 1) {
         digitalWrite(togglePotPin, HIGH);
-        potValue = constrain(analogRead(potPin), 10, 1010);
-        Serial.println(potValue);
+        potValue = constrain(ReadSmooth(potPin), 10, 1010);
+        // Serial.println(potValue);
     } else {
         digitalWrite(togglePotPin, LOW);
     }
@@ -202,6 +202,13 @@ void loop() {
     if (digitalRead(toggleBtnPin) == HIGH && toggleBtnState == 0) {
         toggleBtnState = 1;
         Serial.println("Toggle");
+
+        if (stepControl == 0) {
+            stepControl = 1;
+        } else {
+            stepControl = 0;
+        }
+
     } else if (digitalRead(toggleBtnPin) == LOW) {
         toggleBtnState = 0;
     }
@@ -225,28 +232,36 @@ void loop() {
         lcd.print("Temp: ");
         lcd.print(tempBuffer);
         lcd.write(byte(0));
+        lcd.print("/");
 
         sprintf(tempBuffer, "%3d", int(targetTemp)); // Format targetTemp the same way
-
-        lcd.setCursor(0, 1);
-        lcd.print("Target: ");
         lcd.print(tempBuffer);
         lcd.write(byte(0));
 
+        lcd.setCursor(0, 1);
+        if (!togglePotState) {
+            lcd.print("Press p/ ajustar");
+        } else {
+            lcd.print("Press p/ confirm");
+        }
+
     } else if (menu == 2) {
         if (togglePotState == 1) {
-            stepRPM = map(potValue, 10, 1010, 0, 999);
-            stepRPM = constrain(stepRPM, 0, 999);
-            stepDelay = calcStepDelay(stepRPM);
+            stepSpeed = map(potValue, 10, 1010, 0, 2000);
+            stepSpeed = constrain(stepSpeed, 0, 2000);
+            stepDelay = map(stepSpeed, 0, 2000, 100000, 100); // Adjust the delay based on the speed
         }
 
         lcd.setCursor(0, 0);
-        lcd.print("RPM: ");
-        lcd.print(stepRPM);
+        lcd.print("Velocidade: ");
+        lcd.print(stepSpeed);
 
         lcd.setCursor(0, 1);
-        lcd.print("Delay: ");
-        lcd.print(stepDelay);
+        if (!togglePotState) {
+            lcd.print("Press p/ ajustar");
+        } else {
+            lcd.print("Press p/ confirm");
+        }
     }
 
     //Next we calculate the error between the setpoint and the real value
@@ -279,13 +294,13 @@ void loop() {
     analogWrite(PWM_pin,PID_value);
     previous_error = PID_error;     //Remember to store the previous error for next loop.
     
-    // Serial.print(targetTemp);
-    // Serial.print("      ");
-    // Serial.print(currentTemp);
-    // Serial.print("      ");
-    // Serial.print(PID_value);
-    // Serial.print("      ");
-    // Serial.println(PID_error);
+    Serial.print(targetTemp);
+    Serial.print("      ");
+    Serial.print(currentTemp);
+    Serial.print("      ");
+    Serial.print(PID_value);
+    Serial.print("      ");
+    Serial.println(PID_error);
 }
 
 ISR(TIMER1_COMPA_vect){

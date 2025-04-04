@@ -47,7 +47,8 @@ plus, minus, change menu, scale
 pot - mod - change - emergency
 
 -estabilizar temperatura DONE
--controle de velocidade do motor
+
+-controle de velocidade do motor WIP    
 -fixar melhor HoTEND
 -cortar garrafa
 
