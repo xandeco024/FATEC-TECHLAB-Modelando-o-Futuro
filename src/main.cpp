@@ -17,17 +17,17 @@ const int toggleBtnPin = 8;
 int toggleBtnState = 0;
 
 //stepper motor pins
-const int dirPin = 6;
-const int stepPin = 7;
+const int stepDirPin = 2;
+const int stepPin = 3;
 
 //stepper variables
 const int stepsPerRevolution = 200;
-int stepDelay = 200; // Ajuste o valor para um delay adequado ao motor
+int stepDelay = 5000; // Ajuste o valor para um delay adequado ao motor
 
 int stepState = 0;
 int stepControl = 0;
 int stepSpeed = 0;
-long stepSpeedTime = 0;
+long lastStepTime = 0;
 
 LiquidCrystal_I2C lcd(0x27, 16, 2);
 
@@ -100,8 +100,8 @@ void setup() {
     pinMode(toggleBtnPin, INPUT);
 
     pinMode(stepPin, OUTPUT);
-    pinMode(dirPin, OUTPUT);
-    digitalWrite(dirPin, HIGH); // Set the direction of the stepper motor
+    pinMode(stepDirPin, OUTPUT);
+    digitalWrite(stepDirPin, HIGH); // Set the direction of the stepper motor
     digitalWrite(stepPin, LOW); // Ensure the step pin is low initially
 
     lcd.init();
@@ -113,27 +113,59 @@ void setup() {
     TCCR0B = TCCR0B & B11111000 | B00000010;    // D5 adn D6 PWM frequency of 7812.50 Hz
     Time = millis();
 
-    TCCR1A = 0;             //Reset entire TCCR1A register
-    TCCR1B = 0;             //Reset entire TCCR1B register
-    TCCR1A |= B00000010;    //   /8
-    TCNT1 = 0;              //Reset Timer 1 value to 0
+    digitalWrite(stepDirPin, HIGH); // Set the direction of the stepper motor
+
+    // Set up the stepper motor timer
+    cli();
+    TCCR1A = 0; // Clear control register A
+    TCCR1B = 0; // Clear control register B
+
+    TCCR1B |= (1 << WGM12); // Set CTC mode (WGM12 = 1)
+
+    TCCR1B |= (1 << CS11); // Set prescaler to 8
+
+    OCR1A = F_CPU / (8 * 2 * (1000000 / stepDelay)) - 1;
+
+    TIMSK1 |= (1 << OCIE1A); // Enable compare interrupt
+    sei(); // Enable global interrupts
 }
 
-unsigned long calcStepDelay(int rpm) {
-    return  (60L * 1000L) / (stepsPerRevolution * rpm);
-}
 
-void StepperControl() {
-    if (stepControl == 1) {
-        digitalWrite(stepPin, HIGH); // Set the step pin high
-        delayMicroseconds(stepDelay); // Wait for the specified delay
-        digitalWrite(stepPin, LOW); // Set the step pin low
-        delayMicroseconds(stepDelay); // Wait for the specified delay
+
+void UpdateStepperSpeed(int rpm) {
+    if (rpm < 1) rpm = 1; // Evitar divisão por zero
+    
+    // Calcula o tempo em microssegundos para cada alternância do pino
+    unsigned long microsecondsPerStep = (60L * 1000L * 1000L) / (stepsPerRevolution * rpm * 2);
+    
+    // Ajusta o prescaler e OCR1A com base na velocidade
+    unsigned long timerTicks;
+    
+    cli(); // Desabilita interrupções durante a mudança
+    
+    if (rpm > 150) {
+        // Para velocidades altas, use prescaler de 1
+        TCCR1B &= ~((1 << CS12) | (1 << CS11) | (1 << CS10)); // Limpa bits prescaler
+        TCCR1B |= (1 << CS10); // Prescaler 1
+        timerTicks = (F_CPU / 1 / (1000000L / microsecondsPerStep)) - 1;
+    } else {
+        // Para velocidades normais, use prescaler de 8
+        TCCR1B &= ~((1 << CS12) | (1 << CS11) | (1 << CS10)); // Limpa bits prescaler
+        TCCR1B |= (1 << CS11); // Prescaler 8
+        timerTicks = (F_CPU / 8 / (1000000L / microsecondsPerStep)) - 1;
     }
+    
+    // Garante valores válidos para OCR1A
+    if (timerTicks > 65535) timerTicks = 65535;  // Máximo para timer de 16 bits
+    if (timerTicks < 10) timerTicks = 10;        // Mínimo prático
+    
+    OCR1A = timerTicks;
+    
+    sei(); // Reabilita interrupções
 }
 
 void ReadTemp() {
-    int numReadings = 50; // Number of readings to average
+    int numReadings = 10; // Number of readings to average
     float totalTemp = 0.0; // Variable to store the sum of all readings
 
     for (int i = 0; i < numReadings; i++) {
@@ -160,13 +192,12 @@ int ReadSmooth(int pin){
     int val = 0;
     for(int i = 0; i < 10; i++){
         val += analogRead(pin);
-        delay(10);
+        // delay(10);
     }
     return val/10;
 }
 
 void loop() {
-    StepperControl();
     ReadTemp();
 
     if (digitalRead(modifyBtnPin) == HIGH && modifyBtnState == 0) {
@@ -247,10 +278,13 @@ void loop() {
 
     } else if (menu == 2) {
         if (togglePotState == 1) {
-            stepSpeed = map(potValue, 10, 1010, 0, 2000);
-            stepSpeed = constrain(stepSpeed, 0, 2000);
-            stepDelay = map(stepSpeed, 0, 2000, 100000, 100); // Adjust the delay based on the speed
-        }
+            int rpm = map(potValue, 10, 1010, 5, 200);
+            rpm = constrain(rpm, 5, 80);
+            stepSpeed = rpm;
+            
+            // Atualiza a velocidade do motor
+            UpdateStepperSpeed(rpm);
+        }    
 
         lcd.setCursor(0, 0);
         lcd.print("Velocidade: ");
@@ -304,5 +338,7 @@ void loop() {
 }
 
 ISR(TIMER1_COMPA_vect){
-    TCNT1  = 0;                  //First, set the timer back to 0 so it resets for next interrupt
+    if (stepControl) {
+        PORTD ^= (1 << PORTD3); // Alterna o pino D3 (stepPin) diretamente
+    }
 }
