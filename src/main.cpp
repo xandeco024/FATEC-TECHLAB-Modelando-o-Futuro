@@ -3,6 +3,19 @@
 
 #define F_CPU 16000000UL 
 
+// CONSTANTES DE SEGURANÇA PARA PET
+const float TEMP_SAFETY_LIMIT = 280.0;      // PET derrete ~250°C, margem de segurança
+const float TEMP_EMERGENCY_SHUTDOWN = 320.0; // Desligamento de emergência absoluto
+const float TEMP_MIN_VALID = -10.0;         // Temperatura mínima válida do sensor
+const float TEMP_MAX_VALID = 350.0;         // Temperatura máxima válida do sensor
+const unsigned long TEMP_READ_TIMEOUT = 5000; // 5s sem leitura válida = erro
+
+// Variáveis de segurança
+bool systemError = false;
+bool heatingEnabled = true;
+unsigned long lastValidTempTime = 0;
+float lastValidTemp = 25.0;
+
 //new controls
 const int potPin = A1;
 int potValue = 0;
@@ -165,11 +178,17 @@ void UpdateStepperSpeed(int rpm) {
 }
 
 void ReadTemp() {
-    int numReadings = 10; // Number of readings to average
-    float totalTemp = 0.0; // Variable to store the sum of all readings
+    int numReadings = 10; 
+    float totalTemp = 0.0; 
+    int validReadings = 0;
 
     for (int i = 0; i < numReadings; i++) {
         int read = analogRead(A3);
+        
+        // Verificar se a leitura ADC está em range válido
+        if (read < 10 || read > 1020) {
+            continue; // Pula leitura inválida
+        }
 
         // Calculate the Beta value of the thermistor
         float beta = log(RT1 / RT2) / (1 / T1 - 1 / T2);
@@ -180,12 +199,31 @@ void ReadTemp() {
         // Calculate the temperature in Kelvin based on the thermistor resistance
         double t = 1 / (1 / kelvin25 + log(thermistorResistance / resistance25) / beta);
 
-        // Convert from Kelvin to Celsius and add to the total
-        totalTemp += (t - 273.15);
+        // Convert from Kelvin to Celsius
+        float tempReading = t - 273.15;
+        
+        // Verificar se a temperatura está em range válido
+        if (tempReading >= TEMP_MIN_VALID && tempReading <= TEMP_MAX_VALID) {
+            totalTemp += tempReading;
+            validReadings++;
+        }
     }
 
-    // Calculate the average temperature
-    currentTemp = totalTemp / numReadings;
+    // Se temos leituras válidas, calcular média
+    if (validReadings > 5) { // Precisamos de pelo menos metade das leituras válidas
+        currentTemp = totalTemp / validReadings;
+        lastValidTemp = currentTemp;
+        lastValidTempTime = millis();
+    } else {
+        // Usar última temperatura válida se não conseguimos leituras confiáveis
+        currentTemp = lastValidTemp;
+        
+        // Se faz muito tempo sem leitura válida, marcar erro
+        if (millis() - lastValidTempTime > TEMP_READ_TIMEOUT) {
+            systemError = true;
+            Serial.println("ERRO: Sensor de temperatura falhou!");
+        }
+    }
 }
 
 int ReadSmooth(int pin){
@@ -199,6 +237,39 @@ int ReadSmooth(int pin){
 
 void loop() {
     ReadTemp();
+    
+    // ================ VERIFICAÇÕES DE SEGURANÇA CRÍTICAS ================
+    // Verificação de temperatura de emergência
+    if (currentTemp > TEMP_EMERGENCY_SHUTDOWN) {
+        systemError = true;
+        analogWrite(PWM_pin, 0);  // Desligar aquecimento imediatamente
+        stepControl = 0;          // Parar motor
+        lcd.clear();
+        lcd.print("EMERGENCIA!");
+        lcd.setCursor(0, 1);
+        lcd.print("T>320C PARADO");
+        Serial.println("EMERGENCIA: Temperatura muito alta!");
+        while(1); // Para o sistema completamente
+    }
+    
+    // Verificação de erro do sistema
+    if (systemError) {
+        analogWrite(PWM_pin, 0);  // Desligar aquecimento
+        stepControl = 0;          // Parar motor
+        lcd.clear();
+        lcd.print("ERRO SISTEMA");
+        lcd.setCursor(0, 1);
+        lcd.print("Verificar sensor");
+        Serial.println("ERRO: Sistema em modo de segurança");
+        delay(1000);
+        return; // Não processar mais nada
+    }
+    
+    // Limitar temperatura alvo aos limites seguros para PET
+    if (targetTemp > TEMP_SAFETY_LIMIT) {
+        targetTemp = TEMP_SAFETY_LIMIT;
+    }
+    // ===================================================================
 
     if (digitalRead(modifyBtnPin) == HIGH && modifyBtnState == 0) {
         modifyBtnState = 1;
@@ -252,26 +323,40 @@ void loop() {
 
     } else if (menu == 1) {
         if (togglePotState == 1) {
-            targetTemp = map(potValue, 10, 1010, 0, 300);
-            targetTemp = constrain(targetTemp, 0, 300);
+            // MUDANÇA CRÍTICA: Limitar temperatura máxima a 280°C para segurança do PET
+            targetTemp = map(potValue, 10, 1010, 0, TEMP_SAFETY_LIMIT);
+            targetTemp = constrain(targetTemp, 0, TEMP_SAFETY_LIMIT);
         }
 
-        char tempBuffer[6]; // Buffer to hold formatted temperature (including null terminator)
-        sprintf(tempBuffer, "%3d", int(currentTemp)); // Format the integer with leading spaces
+        char tempBuffer[6];
+        sprintf(tempBuffer, "%3d", int(currentTemp));
 
         lcd.setCursor(0, 0);
-        lcd.print("Temp: ");
+        lcd.print("T:");
         lcd.print(tempBuffer);
         lcd.write(byte(0));
         lcd.print("/");
 
-        sprintf(tempBuffer, "%3d", int(targetTemp)); // Format targetTemp the same way
+        sprintf(tempBuffer, "%3d", int(targetTemp));
         lcd.print(tempBuffer);
         lcd.write(byte(0));
+        
+        // Mostrar status de aquecimento e avisos
+        if (systemError) {
+            lcd.print(" ERR");
+        } else if (PID_value > 0 && targetTemp > 0) {
+            lcd.print(" AQ"); // Aquecendo
+        } else {
+            lcd.print("   ");
+        }
 
         lcd.setCursor(0, 1);
         if (!togglePotState) {
-            lcd.print("Press p/ ajustar");
+            if (targetTemp > 270) {
+                lcd.print("ALTA TEMP!     ");
+            } else {
+                lcd.print("Press p/ ajustar");
+            }
         } else {
             lcd.print("Press p/ confirm");
         }
@@ -287,8 +372,10 @@ void loop() {
         }    
 
         lcd.setCursor(0, 0);
-        lcd.print("Velocidade: ");
+        lcd.print("Motor:");
         lcd.print(stepSpeed);
+        lcd.print("rpm ");
+        lcd.print(stepControl ? "ON " : "OFF");
 
         lcd.setCursor(0, 1);
         if (!togglePotState) {
@@ -322,6 +409,11 @@ void loop() {
     }
     if(PID_value > max_PWM){
         PID_value = max_PWM;
+    }
+    
+    // SEGURANÇA ADICIONAL: Só permitir aquecimento se não há erro e temp alvo > 0
+    if (systemError || targetTemp <= 0) {
+        PID_value = 0;
     }
     
     //Now we can write the PWM signal to the mosfet on digital pin D5
