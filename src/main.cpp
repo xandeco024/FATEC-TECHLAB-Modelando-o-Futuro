@@ -19,8 +19,19 @@ float lastValidTemp = 25.0;
 //new controls
 const int potPin = A1;
 int potValue = 0;
+int lastStablePotValue = 512; // Valor inicial central
 const int togglePotPin = 11;
 int togglePotState = 0;
+
+// FILTROS PARA POTENCIÔMETRO COM MAL CONTATO
+const int POT_NOISE_THRESHOLD = 15;    // Ignora variações menores que 15
+const int POT_FILTER_SAMPLES = 8;      // Média móvel de 8 amostras
+const int POT_CHANGE_DELAY = 100;      // 100ms entre mudanças válidas
+int potFilterBuffer[POT_FILTER_SAMPLES];
+int potFilterIndex = 0;
+unsigned long lastPotChangeTime = 0;
+bool potFilterInitialized = false;
+
 const int modifyBtnPin = 10;
 int modifyBtnState = 0;
 const int menuBtnPin = 9;
@@ -35,12 +46,30 @@ const int stepPin = 3;
 
 //stepper variables
 const int stepsPerRevolution = 200;
-int stepDelay = 5000; // Ajuste o valor para um delay adequado ao motor
+int stepDelay = 10000; // Aumentar delay inicial para menos vibração
+
+// MICROSTEPPING: Configurar baseado no driver
+// 1 = full step, 2 = half step, 4 = quarter step, 8 = eighth step, 16 = sixteenth step
+const int microstepMultiplier = 16; // 1/16 para máximo silêncio
+
+// NOTA: Microstepping 1/16 - Prós e Contras:
+// PRÓS: Muito mais silencioso, movimento mais suave
+// CONTRAS: 
+// - Torque reduzido (~70% do torque nominal)
+// - 16x mais interrupções (mais carga no processador)
+// - Precisão posicional pode ser menor devido a não-linearidades
+// - Velocidade máxima efetiva menor
+// Para extrusora de filamento: geralmente OK pois não precisa de muito torque
 
 int stepState = 0;
 int stepControl = 0;
 int stepSpeed = 0;
 long lastStepTime = 0;
+
+// Novas variáveis para controle suave
+volatile bool stepDirection = true;
+volatile unsigned long stepCounter = 0;
+volatile bool enableStepping = false;
 
 LiquidCrystal_I2C lcd(0x27, 16, 2);
 
@@ -104,6 +133,15 @@ byte celsiusChar[] = {
 void setup() {
     Serial.begin(115200);
 
+    // PRIMEIRA COISA: Configurar pinos do motor para estado seguro
+    pinMode(stepPin, OUTPUT);
+    pinMode(stepDirPin, OUTPUT);
+    digitalWrite(stepPin, LOW);     // Garantir LOW imediatamente
+    digitalWrite(stepDirPin, LOW);  // Definir direção
+    
+    // Pequeno delay para estabilizar
+    delay(50);
+
     pinMode(A3, INPUT);
 
     pinMode(potPin, INPUT);
@@ -112,69 +150,81 @@ void setup() {
     pinMode(menuBtnPin, INPUT);
     pinMode(toggleBtnPin, INPUT);
 
-    pinMode(stepPin, OUTPUT);
-    pinMode(stepDirPin, OUTPUT);
-    digitalWrite(stepDirPin, HIGH); // Set the direction of the stepper motor
-    digitalWrite(stepPin, LOW); // Ensure the step pin is low initially
-
     lcd.init();
     lcd.createChar(0, celsiusChar);
     lcd.backlight();
 
     pinMode(PWM_pin, OUTPUT);
+    
+    // Garantir que PWM está desligado inicialmente
+    analogWrite(PWM_pin, 0);
 
     TCCR0B = TCCR0B & B11111000 | B00000010;    // D5 adn D6 PWM frequency of 7812.50 Hz
     Time = millis();
 
-    digitalWrite(stepDirPin, HIGH); // Set the direction of the stepper motor
-
-    // Set up the stepper motor timer
+    // Configuração melhorada do timer para motor
     cli();
     TCCR1A = 0; // Clear control register A
     TCCR1B = 0; // Clear control register B
 
     TCCR1B |= (1 << WGM12); // Set CTC mode (WGM12 = 1)
+    TCCR1B |= (1 << CS11) | (1 << CS10); // Prescaler 64 (mais estável)
 
-    TCCR1B |= (1 << CS11); // Set prescaler to 8
+    OCR1A = 2000; // Valor inicial conservador
 
-    OCR1A = F_CPU / (8 * 2 * (1000000 / stepDelay)) - 1;
-
-    TIMSK1 |= (1 << OCIE1A); // Enable compare interrupt
+    // NÃO habilitar interrupção ainda - só após tudo configurado
+    // TIMSK1 |= (1 << OCIE1A);
     sei(); // Enable global interrupts
+    
+    // Inicializar variáveis de controle
+    stepControl = 0;
+    stepSpeed = 0;
+    targetTemp = 0;
+    
+    // Agora sim, habilitar interrupção do timer
+    TIMSK1 |= (1 << OCIE1A);
+    
+    // Delay final para estabilização completa
+    delay(100);
 }
 
-
-
 void UpdateStepperSpeed(int rpm) {
-    if (rpm < 1) rpm = 1; // Evitar divisão por zero
+    if (rpm < 1) rpm = 1;
+    // Com 1/16 microstepping, limitar velocidade para compensar perda de torque
+    if (rpm > 150) rpm = 150; // Reduzido devido ao microstepping
     
-    // Calcula o tempo em microssegundos para cada alternância do pino
-    unsigned long microsecondsPerStep = (60L * 1000L * 1000L) / (stepsPerRevolution * rpm * 2);
+    // Calcular com microstepping - 16x mais pulsos!
+    unsigned long totalStepsPerRev = stepsPerRevolution * microstepMultiplier; // 200 * 16 = 3200 steps/rev
+    unsigned long stepsPerSecond = (totalStepsPerRev * rpm) / 60;
+    unsigned long timerFreq = stepsPerSecond * 2;
     
-    // Ajusta o prescaler e OCR1A com base na velocidade
     unsigned long timerTicks;
     
-    cli(); // Desabilita interrupções durante a mudança
+    cli();
     
-    if (rpm > 150) {
-        // Para velocidades altas, use prescaler de 1
-        TCCR1B &= ~((1 << CS12) | (1 << CS11) | (1 << CS10)); // Limpa bits prescaler
-        TCCR1B |= (1 << CS10); // Prescaler 1
-        timerTicks = (F_CPU / 1 / (1000000L / microsecondsPerStep)) - 1;
-    } else {
-        // Para velocidades normais, use prescaler de 8
-        TCCR1B &= ~((1 << CS12) | (1 << CS11) | (1 << CS10)); // Limpa bits prescaler
-        TCCR1B |= (1 << CS11); // Prescaler 8
-        timerTicks = (F_CPU / 8 / (1000000L / microsecondsPerStep)) - 1;
-    }
+    // Com 1/16, sempre usar prescaler menor para alta frequência
+    TCCR1B &= ~((1 << CS12) | (1 << CS11) | (1 << CS10));
+    TCCR1B |= (1 << CS11); // Prescaler 8 (obrigatório para 1/16)
+    timerTicks = (F_CPU / 8 / timerFreq) - 1;
     
-    // Garante valores válidos para OCR1A
-    if (timerTicks > 65535) timerTicks = 65535;  // Máximo para timer de 16 bits
-    if (timerTicks < 10) timerTicks = 10;        // Mínimo prático
+    if (timerTicks > 65535) timerTicks = 65535;
+    if (timerTicks < 50) timerTicks = 50; // Mínimo maior para estabilidade
     
     OCR1A = timerTicks;
     
-    sei(); // Reabilita interrupções
+    sei();
+    
+    // Debug mostrando carga do sistema
+    if (rpm % 20 == 0) {
+        Serial.print("RPM: ");
+        Serial.print(rpm);
+        Serial.print(" | Freq ISR: ");
+        Serial.print(timerFreq);
+        Serial.print("Hz | Steps/rev: ");
+        Serial.print(totalStepsPerRev);
+        Serial.print(" | Ticks: ");
+        Serial.println(timerTicks);
+    }
 }
 
 void ReadTemp() {
@@ -226,11 +276,60 @@ void ReadTemp() {
     }
 }
 
+// Função melhorada para ler potenciômetro com filtros
+int ReadStablePot(int pin) {
+    int rawValue = analogRead(pin);
+    
+    // Inicializar buffer na primeira leitura
+    if (!potFilterInitialized) {
+        for (int i = 0; i < POT_FILTER_SAMPLES; i++) {
+            potFilterBuffer[i] = rawValue;
+        }
+        potFilterInitialized = true;
+        return rawValue;
+    }
+    
+    // Filtro 1: Rejeitar valores muito fora do esperado (mal contato severo)
+    if (abs(rawValue - lastStablePotValue) > 400) {
+        return lastStablePotValue; // Manter valor anterior se muito discrepante
+    }
+    
+    // Filtro 2: Média móvel para suavizar ruído
+    potFilterBuffer[potFilterIndex] = rawValue;
+    potFilterIndex = (potFilterIndex + 1) % POT_FILTER_SAMPLES;
+    
+    long sum = 0;
+    for (int i = 0; i < POT_FILTER_SAMPLES; i++) {
+        sum += potFilterBuffer[i];
+    }
+    int filteredValue = sum / POT_FILTER_SAMPLES;
+    
+    // Filtro 3: Histerese - só aceita mudanças significativas
+    if (abs(filteredValue - lastStablePotValue) < POT_NOISE_THRESHOLD) {
+        return lastStablePotValue; // Manter valor se mudança é muito pequena
+    }
+    
+    // Filtro 4: Rate limiting - evita mudanças muito rápidas
+    if (millis() - lastPotChangeTime < POT_CHANGE_DELAY) {
+        return lastStablePotValue;
+    }
+    
+    // Mudança válida aceita
+    lastPotChangeTime = millis();
+    lastStablePotValue = filteredValue;
+    return filteredValue;
+}
+
 int ReadSmooth(int pin){
+    // Usar nova função filtrada para o potenciômetro
+    if (pin == potPin) {
+        return ReadStablePot(pin);
+    }
+    
+    // Para outros pinos, usar método original
     int val = 0;
     for(int i = 0; i < 10; i++){
         val += analogRead(pin);
-        // delay(10);
     }
     return val/10;
 }
@@ -285,8 +384,22 @@ void loop() {
 
     if (togglePotState == 1) {
         digitalWrite(togglePotPin, HIGH);
-        potValue = constrain(ReadSmooth(potPin), 10, 1010);
-        // Serial.println(potValue);
+        
+        // Usar função melhorada com filtros
+        int rawPot = ReadStablePot(potPin);
+        potValue = constrain(rawPot, 10, 1010);
+        
+        // Debug para monitorar estabilidade
+        static unsigned long lastDebugTime = 0;
+        if (millis() - lastDebugTime > 500) { // Debug a cada 500ms
+            Serial.print("Pot Raw: ");
+            Serial.print(analogRead(potPin));
+            Serial.print(" | Filtered: ");
+            Serial.print(potValue);
+            Serial.print(" | Stable: ");
+            Serial.println(lastStablePotValue);
+            lastDebugTime = millis();
+        }
     } else {
         digitalWrite(togglePotPin, LOW);
     }
@@ -323,7 +436,7 @@ void loop() {
 
     } else if (menu == 1) {
         if (togglePotState == 1) {
-            // MUDANÇA CRÍTICA: Limitar temperatura máxima a 280°C para segurança do PET
+            // Usar valor filtrado diretamente
             targetTemp = map(potValue, 10, 1010, 0, TEMP_SAFETY_LIMIT);
             targetTemp = constrain(targetTemp, 0, TEMP_SAFETY_LIMIT);
         }
@@ -358,30 +471,46 @@ void loop() {
                 lcd.print("Press p/ ajustar");
             }
         } else {
-            lcd.print("Press p/ confirm");
+            // Mostrar indicador de estabilidade
+            lcd.print("Ajustando... ");
+            if (millis() - lastPotChangeTime > 1000) {
+                lcd.print("OK");
+            } else {
+                lcd.print("  ");
+            }
         }
 
     } else if (menu == 2) {
         if (togglePotState == 1) {
-            int rpm = map(potValue, 10, 1010, 5, 200);
-            rpm = constrain(rpm, 5, 80);
+            // REMOVIDO LIMITE MÍNIMO: agora vai de 5 a 120 RPM
+            int rpm = map(potValue, 10, 1010, 0, 180); // Era 40, agora é 5
+            rpm = constrain(rpm, 0, 180);
             stepSpeed = rpm;
             
-            // Atualiza a velocidade do motor
             UpdateStepperSpeed(rpm);
         }    
 
         lcd.setCursor(0, 0);
         lcd.print("Motor:");
         lcd.print(stepSpeed);
-        lcd.print("rpm ");
-        lcd.print(stepControl ? "ON " : "OFF");
+        lcd.print("rpm");
+        
+        if (stepSpeed < 100) {
+            lcd.print(" ");
+        }
+        lcd.print(stepControl ? " ON" : "OFF");
 
         lcd.setCursor(0, 1);
         if (!togglePotState) {
-            lcd.print("Press p/ ajustar");
+            lcd.print("1/16 SILENT mode");
         } else {
-            lcd.print("Press p/ confirm");
+            // Indicador de ajuste estável
+            lcd.print("Ajustando... ");
+            if (millis() - lastPotChangeTime > 1000) {
+                lcd.print("OK");
+            } else {
+                lcd.print("  ");
+            }
         }
     }
 
@@ -400,6 +529,7 @@ void loop() {
     //Now we can calculate the D calue
     PID_d = 0.01*kd*((PID_error - previous_error)/elapsedTime);
     //Final total PID value is the sum of P + I + D
+
     PID_value = PID_p + PID_i + PID_d;
 
     
@@ -429,8 +559,25 @@ void loop() {
     Serial.println(PID_error);
 }
 
+// ISR agora roda 16x mais vezes! (A 100 RPM = ~5300 Hz)
 ISR(TIMER1_COMPA_vect){
-    if (stepControl) {
-        PORTD ^= (1 << PORTD3); // Alterna o pino D3 (stepPin) diretamente
+    if (stepControl && stepSpeed > 0) {
+        static bool stepPhase = false;
+        
+        // Código mais otimizado para reduzir overhead da ISR
+        if (stepPhase) {
+            PORTD |= B00001000;   // Mais rápido que (1 << PORTD3)
+        } else {
+            PORTD &= B11110111;   // Mais rápido que ~(1 << PORTD3)
+        }
+        
+        stepPhase = !stepPhase;
+        
+        if (stepPhase) {
+            stepCounter++;
+        }
+    } else {
+        PORTD &= B11110111;
+        stepCounter = 0;
     }
 }
