@@ -466,7 +466,7 @@ void loop() {
         lcd.setCursor(0, 1);
         if (!togglePotState) {
             if (targetTemp > 270) {
-                lcd.print("ALTA TEMP!     ");
+                lcd.print("ALTA TEMP!      ");
             } else {
                 lcd.print("Press p/ ajustar");
             }
