@@ -4,7 +4,7 @@
 #define F_CPU 16000000UL 
 
 // CONSTANTES DE SEGURANÇA PARA PET
-const float TEMP_SAFETY_LIMIT = 280.0;      // PET derrete ~250°C, margem de segurança
+const float TEMP_SAFETY_LIMIT = 300.0;      // PET derrete ~250°C, margem de segurança
 const float TEMP_EMERGENCY_SHUTDOWN = 320.0; // Desligamento de emergência absoluto
 const float TEMP_MIN_VALID = -10.0;         // Temperatura mínima válida do sensor
 const float TEMP_MAX_VALID = 350.0;         // Temperatura máxima válida do sensor
@@ -90,7 +90,6 @@ const float resistance25 = 100000.0;    // Resistência do termistor a 25ºC
 
 int PWM_pin = 5; //Pin for PWM signal to the MOSFET driver (the BJT npn with pullup)
 int but1 = 7;
-int EN = 2;
 int STEP = 3;
 int DIR = 4;
 int LED = 13;
@@ -146,9 +145,9 @@ void setup() {
 
     pinMode(potPin, INPUT);
     pinMode(togglePotPin, OUTPUT);
-    pinMode(modifyBtnPin, INPUT);
-    pinMode(menuBtnPin, INPUT);
-    pinMode(toggleBtnPin, INPUT);
+    pinMode(modifyBtnPin, INPUT_PULLUP);
+    pinMode(menuBtnPin, INPUT_PULLUP);
+    pinMode(toggleBtnPin, INPUT_PULLUP);
 
     lcd.init();
     lcd.createChar(0, celsiusChar);
@@ -370,7 +369,7 @@ void loop() {
     }
     // ===================================================================
 
-    if (digitalRead(modifyBtnPin) == HIGH && modifyBtnState == 0) {
+    if (digitalRead(modifyBtnPin) == LOW && modifyBtnState == 0) {
         modifyBtnState = 1;
         Serial.println("Modify");
         if (togglePotState == 0) {
@@ -378,7 +377,7 @@ void loop() {
         } else {
             togglePotState = 0;
         }
-    } else if (digitalRead(modifyBtnPin) == LOW) {
+    } else if (digitalRead(modifyBtnPin) == HIGH) {
         modifyBtnState = 0;
     }
 
@@ -404,17 +403,17 @@ void loop() {
         digitalWrite(togglePotPin, LOW);
     }
 
-    if (digitalRead(menuBtnPin) == HIGH && menuBtnState == 0) {
+    if (digitalRead(menuBtnPin) == LOW && menuBtnState == 0) {
         menuBtnState = 1;
         Serial.println("Menu");
         menu = (menu + 1) % 3;
         lcd.clear();
         togglePotState = 0;
-    } else if (digitalRead(menuBtnPin) == LOW) {
+    } else if (digitalRead(menuBtnPin) == HIGH) {
         menuBtnState = 0;
     }
 
-    if (digitalRead(toggleBtnPin) == HIGH && toggleBtnState == 0) {
+    if (digitalRead(toggleBtnPin) == LOW && toggleBtnState == 0) {
         toggleBtnState = 1;
         Serial.println("Toggle");
 
@@ -424,7 +423,7 @@ void loop() {
             stepControl = 0;
         }
 
-    } else if (digitalRead(toggleBtnPin) == LOW) {
+    } else if (digitalRead(toggleBtnPin) == HIGH) {
         toggleBtnState = 0;
     }
 
