@@ -16,24 +16,38 @@ bool heatingEnabled = true;
 unsigned long lastValidTempTime = 0;
 float lastValidTemp = 25.0;
 
-//new controls
+// Controles antigos (potenciômetro) removidos
+/*
 const int potPin = A1;
 int potValue = 0;
-int lastStablePotValue = 512; // Valor inicial central
+int lastStablePotValue = 512;
 const int togglePotPin = 11;
 int togglePotState = 0;
+*/
 
-// FILTROS PARA POTENCIÔMETRO COM MAL CONTATO
-const int POT_NOISE_THRESHOLD = 15;    // Ignora variações menores que 15
-const int POT_FILTER_SAMPLES = 8;      // Média móvel de 8 amostras
-const int POT_CHANGE_DELAY = 100;      // 100ms entre mudanças válidas
+// Filtros para potenciômetro removidos
+/*
+const int POT_NOISE_THRESHOLD = 15;
+const int POT_FILTER_SAMPLES = 8;
+const int POT_CHANGE_DELAY = 100;
 int potFilterBuffer[POT_FILTER_SAMPLES];
 int potFilterIndex = 0;
 unsigned long lastPotChangeTime = 0;
 bool potFilterInitialized = false;
+*/
 
-const int modifyBtnPin = 10;
-int modifyBtnState = 0;
+// Novos botões de controle
+const int minusBtnPin = 12;
+const int scaleBtnPin = 11;
+const int plusBtnPin = 10; // Substitui o antigo modifyBtnPin
+
+int minusBtnState = 0;
+int scaleBtnState = 0;
+int plusBtnState = 0;
+
+int tempScale = 10;
+int motorScale = 10;
+
 const int menuBtnPin = 9;
 int menuBtnState = 0;
 int menu = 0;
@@ -143,9 +157,15 @@ void setup() {
 
     pinMode(A3, INPUT);
 
-    pinMode(potPin, INPUT);
-    pinMode(togglePotPin, OUTPUT);
-    pinMode(modifyBtnPin, INPUT_PULLUP);
+    // Pinos do potenciômetro removidos
+    // pinMode(potPin, INPUT);
+    // pinMode(togglePotPin, OUTPUT);
+
+    // Configuração dos novos botões
+    pinMode(plusBtnPin, INPUT_PULLUP);
+    pinMode(scaleBtnPin, INPUT_PULLUP);
+    pinMode(minusBtnPin, INPUT_PULLUP);
+    
     pinMode(menuBtnPin, INPUT_PULLUP);
     pinMode(toggleBtnPin, INPUT_PULLUP);
 
@@ -275,63 +295,8 @@ void ReadTemp() {
     }
 }
 
-// Função melhorada para ler potenciômetro com filtros
-int ReadStablePot(int pin) {
-    int rawValue = analogRead(pin);
-    
-    // Inicializar buffer na primeira leitura
-    if (!potFilterInitialized) {
-        for (int i = 0; i < POT_FILTER_SAMPLES; i++) {
-            potFilterBuffer[i] = rawValue;
-        }
-        potFilterInitialized = true;
-        return rawValue;
-    }
-    
-    // Filtro 1: Rejeitar valores muito fora do esperado (mal contato severo)
-    if (abs(rawValue - lastStablePotValue) > 400) {
-        return lastStablePotValue; // Manter valor anterior se muito discrepante
-    }
-    
-    // Filtro 2: Média móvel para suavizar ruído
-    potFilterBuffer[potFilterIndex] = rawValue;
-    potFilterIndex = (potFilterIndex + 1) % POT_FILTER_SAMPLES;
-    
-    long sum = 0;
-    for (int i = 0; i < POT_FILTER_SAMPLES; i++) {
-        sum += potFilterBuffer[i];
-    }
-    int filteredValue = sum / POT_FILTER_SAMPLES;
-    
-    // Filtro 3: Histerese - só aceita mudanças significativas
-    if (abs(filteredValue - lastStablePotValue) < POT_NOISE_THRESHOLD) {
-        return lastStablePotValue; // Manter valor se mudança é muito pequena
-    }
-    
-    // Filtro 4: Rate limiting - evita mudanças muito rápidas
-    if (millis() - lastPotChangeTime < POT_CHANGE_DELAY) {
-        return lastStablePotValue;
-    }
-    
-    // Mudança válida aceita
-    lastPotChangeTime = millis();
-    lastStablePotValue = filteredValue;
-    return filteredValue;
-}
-
-int ReadSmooth(int pin){
-    // Usar nova função filtrada para o potenciômetro
-    if (pin == potPin) {
-        return ReadStablePot(pin);
-    }
-    
-    // Para outros pinos, usar método original
-    int val = 0;
-    for(int i = 0; i < 10; i++){
-        val += analogRead(pin);
-    }
-    return val/10;
-}
+// Função ReadStablePot removida pois não é mais necessária
+// Função ReadSmooth removida pois não é mais necessária
 
 void loop() {
     ReadTemp();
@@ -369,38 +334,47 @@ void loop() {
     }
     // ===================================================================
 
-    if (digitalRead(modifyBtnPin) == LOW && modifyBtnState == 0) {
-        modifyBtnState = 1;
-        Serial.println("Modify");
-        if (togglePotState == 0) {
-            togglePotState = 1;
-        } else {
-            togglePotState = 0;
+    // Lógica antiga do potenciômetro e botão de modificação removida
+
+    // Leitura dos novos botões de controle
+    if (digitalRead(plusBtnPin) == LOW && plusBtnState == 0) {
+        plusBtnState = 1;
+        Serial.println("Plus");
+        if (menu == 1) {
+            targetTemp += tempScale;
+        } else if (menu == 2) {
+            stepSpeed += motorScale;
         }
-    } else if (digitalRead(modifyBtnPin) == HIGH) {
-        modifyBtnState = 0;
+    } else if (digitalRead(plusBtnPin) == HIGH) {
+        plusBtnState = 0;
     }
 
-    if (togglePotState == 1) {
-        digitalWrite(togglePotPin, HIGH);
-        
-        // Usar função melhorada com filtros
-        int rawPot = ReadStablePot(potPin);
-        potValue = constrain(rawPot, 10, 1010);
-        
-        // Debug para monitorar estabilidade
-        static unsigned long lastDebugTime = 0;
-        if (millis() - lastDebugTime > 500) { // Debug a cada 500ms
-            Serial.print("Pot Raw: ");
-            Serial.print(analogRead(potPin));
-            Serial.print(" | Filtered: ");
-            Serial.print(potValue);
-            Serial.print(" | Stable: ");
-            Serial.println(lastStablePotValue);
-            lastDebugTime = millis();
+    if (digitalRead(minusBtnPin) == LOW && minusBtnState == 0) {
+        minusBtnState = 1;
+        Serial.println("Minus");
+        if (menu == 1) {
+            targetTemp -= tempScale;
+        } else if (menu == 2) {
+            stepSpeed -= motorScale;
         }
-    } else {
-        digitalWrite(togglePotPin, LOW);
+    } else if (digitalRead(minusBtnPin) == HIGH) {
+        minusBtnState = 0;
+    }
+
+    if (digitalRead(scaleBtnPin) == LOW && scaleBtnState == 0) {
+        scaleBtnState = 1;
+        Serial.println("Scale");
+        if (menu == 1) {
+            if (tempScale == 1) tempScale = 10;
+            else if (tempScale == 10) tempScale = 100;
+            else tempScale = 1;
+        } else if (menu == 2) {
+            if (motorScale == 1) motorScale = 10;
+            else if (motorScale == 10) motorScale = 100;
+            else motorScale = 1;
+        }
+    } else if (digitalRead(scaleBtnPin) == HIGH) {
+        scaleBtnState = 0;
     }
 
     if (digitalRead(menuBtnPin) == LOW && menuBtnState == 0) {
@@ -408,7 +382,6 @@ void loop() {
         Serial.println("Menu");
         menu = (menu + 1) % 3;
         lcd.clear();
-        togglePotState = 0;
     } else if (digitalRead(menuBtnPin) == HIGH) {
         menuBtnState = 0;
     }
@@ -434,11 +407,8 @@ void loop() {
         lcd.print("Futuro");
 
     } else if (menu == 1) {
-        if (togglePotState == 1) {
-            // Usar valor filtrado diretamente
-            targetTemp = map(potValue, 10, 1010, 0, TEMP_SAFETY_LIMIT);
-            targetTemp = constrain(targetTemp, 0, TEMP_SAFETY_LIMIT);
-        }
+        // A lógica de ajuste agora é feita pelos botões +, - e escala
+        targetTemp = constrain(targetTemp, 0, TEMP_SAFETY_LIMIT);
 
         char tempBuffer[6];
         sprintf(tempBuffer, "%3d", int(currentTemp));
@@ -463,54 +433,32 @@ void loop() {
         }
 
         lcd.setCursor(0, 1);
-        if (!togglePotState) {
-            if (targetTemp > 270) {
-                lcd.print("ALTA TEMP!      ");
-            } else {
-                lcd.print("Press p/ ajustar");
-            }
-        } else {
-            // Mostrar indicador de estabilidade
-            lcd.print("Ajustando... ");
-            if (millis() - lastPotChangeTime > 1000) {
-                lcd.print("OK");
-            } else {
-                lcd.print("  ");
-            }
-        }
+        lcd.print("Escala: ");
+        char scaleBuffer[4];
+        sprintf(scaleBuffer, "%3d", tempScale);
+        lcd.print(scaleBuffer);
+        lcd.print(" C ");
 
     } else if (menu == 2) {
-        if (togglePotState == 1) {
-            // REMOVIDO LIMITE MÍNIMO: agora vai de 5 a 120 RPM
-            int rpm = map(potValue, 10, 1010, 0, 180); // Era 40, agora é 5
-            rpm = constrain(rpm, 0, 180);
-            stepSpeed = rpm;
-            
-            UpdateStepperSpeed(rpm);
-        }    
+        // A lógica de ajuste agora é feita pelos botões +, - e escala
+        stepSpeed = constrain(stepSpeed, 0, 180);
+        UpdateStepperSpeed(stepSpeed);
 
         lcd.setCursor(0, 0);
         lcd.print("Motor:");
-        lcd.print(stepSpeed);
+        char speedBuffer[4];
+        sprintf(speedBuffer, "%3d", stepSpeed);
+        lcd.print(speedBuffer);
         lcd.print("rpm");
         
-        if (stepSpeed < 100) {
-            lcd.print(" ");
-        }
         lcd.print(stepControl ? " ON" : "OFF");
 
         lcd.setCursor(0, 1);
-        if (!togglePotState) {
-            lcd.print("1/16 SILENT mode");
-        } else {
-            // Indicador de ajuste estável
-            lcd.print("Ajustando... ");
-            if (millis() - lastPotChangeTime > 1000) {
-                lcd.print("OK");
-            } else {
-                lcd.print("  ");
-            }
-        }
+        lcd.print("Escala: ");
+        char scaleBuffer[4];
+        sprintf(scaleBuffer, "%3d", motorScale);
+        lcd.print(scaleBuffer);
+        lcd.print("   ");
     }
 
     //Next we calculate the error between the setpoint and the real value
