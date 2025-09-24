@@ -54,6 +54,20 @@ int menu = 0;
 const int toggleBtnPin = 8;
 int toggleBtnState = 0;
 
+// Automação
+enum AutoState {
+    AUTO_IDLE,
+    AUTO_PREHEATING,
+    AUTO_READY_TO_START, // Novo estado de confirmação
+    AUTO_RUNNING,
+    AUTO_PAUSED_TEMP,
+    AUTO_STOPPED
+};
+AutoState autoState = AUTO_IDLE;
+const float AUTO_TARGET_TEMP = 260.0;
+const float AUTO_MIN_TEMP = 245.0;
+const int AUTO_MAX_RPM = 60;
+
 //stepper motor pins
 const int stepDirPin = 2;
 const int stepPin = 3;
@@ -380,7 +394,13 @@ void loop() {
     if (digitalRead(menuBtnPin) == LOW && menuBtnState == 0) {
         menuBtnState = 1;
         Serial.println("Menu");
-        menu = (menu + 1) % 3;
+
+        // Se estava no modo auto, para tudo antes de sair
+        if (menu == 3) {
+            autoState = AUTO_STOPPED;
+        }
+
+        menu = (menu + 1) % 4; // Agora são 4 menus (0, 1, 2, 3)
         lcd.clear();
     } else if (digitalRead(menuBtnPin) == HIGH) {
         menuBtnState = 0;
@@ -390,10 +410,22 @@ void loop() {
         toggleBtnState = 1;
         Serial.println("Toggle");
 
-        if (stepControl == 0) {
-            stepControl = 1;
-        } else {
-            stepControl = 0;
+        if (menu == 2) { // Controle manual do motor
+            if (stepControl == 0) {
+                stepControl = 1;
+            } else {
+                stepControl = 0;
+            }
+        } else if (menu == 3) { // Controle da automação
+            if (autoState == AUTO_IDLE) {
+                autoState = AUTO_PREHEATING;
+            } else if (autoState == AUTO_READY_TO_START) {
+                autoState = AUTO_RUNNING;
+                stepSpeed = 5; // Inicia o motor devagar
+                stepControl = 1;
+            } else {
+                autoState = AUTO_STOPPED; // Para o processo se estiver rodando
+            }
         }
 
     } else if (digitalRead(toggleBtnPin) == HIGH) {
@@ -459,15 +491,127 @@ void loop() {
         sprintf(scaleBuffer, "%3d", motorScale);
         lcd.print(scaleBuffer);
         lcd.print("   ");
+    } else if (menu == 3) { // Novo menu de Automação
+        switch (autoState) {
+            case AUTO_IDLE:
+                targetTemp = 0;
+                stepControl = 0;
+                stepSpeed = 0;
+                UpdateStepperSpeed(0);
+
+                lcd.setCursor(0, 0);
+                lcd.print("Modo Auto");
+                lcd.setCursor(0, 1);
+                lcd.print("Pressione p/ Inic.");
+                break;
+
+            case AUTO_PREHEATING:
+                targetTemp = AUTO_TARGET_TEMP;
+                stepControl = 0;
+                stepSpeed = 0;
+                UpdateStepperSpeed(0);
+
+                lcd.setCursor(0, 0);
+                lcd.print("Aquecendo...");
+                lcd.setCursor(0, 1);
+                lcd.print("T:");
+                lcd.print((int)currentTemp);
+                lcd.print("/");
+                lcd.print((int)AUTO_TARGET_TEMP);
+                lcd.write(byte(0));
+
+                if (currentTemp >= AUTO_TARGET_TEMP) {
+                    autoState = AUTO_READY_TO_START; // Muda para o estado de prontidão
+                }
+                break;
+
+            case AUTO_READY_TO_START:
+                targetTemp = AUTO_TARGET_TEMP; // Mantém a temperatura
+                stepControl = 0; // Motor continua parado
+                stepSpeed = 0;
+                UpdateStepperSpeed(0);
+
+                lcd.setCursor(0, 0);
+                lcd.print("Pronto. Pressione");
+                lcd.setCursor(0, 1);
+                lcd.print("para iniciar...");
+                break;
+
+            case AUTO_RUNNING:
+                targetTemp = AUTO_TARGET_TEMP;
+                stepControl = 1;
+
+                // Lógica de controle de velocidade
+                if (currentTemp < AUTO_MIN_TEMP) {
+                    autoState = AUTO_PAUSED_TEMP;
+                } else if (currentTemp < AUTO_TARGET_TEMP) {
+                    // Reduz a velocidade proporcionalmente
+                    stepSpeed = map(currentTemp, AUTO_MIN_TEMP, AUTO_TARGET_TEMP, 0, AUTO_MAX_RPM);
+                } else {
+                    // Aceleração gradual até o máximo
+                    static unsigned long lastRpmIncrease = 0;
+                    if (millis() - lastRpmIncrease > 200) { // Aumenta a cada 200ms
+                        if (stepSpeed < AUTO_MAX_RPM) {
+                            stepSpeed++;
+                        }
+                        lastRpmIncrease = millis();
+                    }
+                    stepSpeed = constrain(stepSpeed, 0, AUTO_MAX_RPM);
+                }
+                UpdateStepperSpeed(stepSpeed);
+
+                lcd.setCursor(0, 0);
+                lcd.print("T:");
+                lcd.print((int)currentTemp);
+                lcd.write(byte(0));
+                lcd.print(" V:");
+                lcd.print(stepSpeed);
+                lcd.print("rpm ");
+                lcd.setCursor(0, 1);
+                lcd.print("Extrudando...");
+                break;
+
+            case AUTO_PAUSED_TEMP:
+                targetTemp = AUTO_TARGET_TEMP;
+                stepControl = 0; // Pausa o motor
+                stepSpeed = 0;
+                UpdateStepperSpeed(0);
+
+                lcd.setCursor(0, 0);
+                lcd.print("Temp. Baixa!");
+                lcd.setCursor(0, 1);
+                lcd.print("T:");
+                lcd.print((int)currentTemp);
+                lcd.print("/");
+                lcd.print((int)AUTO_TARGET_TEMP);
+                lcd.write(byte(0));
+
+                if (currentTemp >= AUTO_TARGET_TEMP) {
+                    autoState = AUTO_RUNNING;
+                }
+                break;
+
+            case AUTO_STOPPED:
+                targetTemp = 0;
+                stepControl = 0;
+                stepSpeed = 0;
+                UpdateStepperSpeed(0);
+                autoState = AUTO_IDLE; // Volta para o estado inicial
+                lcd.clear();
+                break;
+        }
     }
 
     //Next we calculate the error between the setpoint and the real value
-    PID_error = targetTemp - currentTemp + 6;
+    PID_error = targetTemp - currentTemp; // Removido o offset de +6 para um PID mais limpo
     //Calculate the P value
     PID_p = 0.01*kp * PID_error;
     //Calculate the I value in a range on +-6
-    PID_i = 0.01*PID_i + (ki * PID_error);
+    PID_i = PID_i + (0.01 * ki * PID_error); // Lógica do integral corrigida
     
+    // Anti-windup: Limita o termo integral para evitar que ele cresça demais
+    if(PID_i > max_PWM) PID_i = max_PWM;
+    if(PID_i < 0) PID_i = 0;
 
     //For derivative we need real time to calculate speed change rate
     timePrev = Time;                            // the previous time is stored before the actual time read
