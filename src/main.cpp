@@ -57,16 +57,23 @@ int toggleBtnState = 0;
 // Automação
 enum AutoState {
     AUTO_IDLE,
-    AUTO_PREHEATING,
-    AUTO_READY_TO_START, // Novo estado de confirmação
-    AUTO_RUNNING,
-    AUTO_PAUSED_TEMP,
-    AUTO_STOPPED
+    AUTO_CONFIRM_PREHEAT,    // Aguardando confirmação para aquecer
+    AUTO_PREHEATING,         // Aquecendo
+    AUTO_READY_TO_EXTRUDE,   // Pronto, aguardando confirmação para extrusar
+    AUTO_RUNNING,            // Extrusando
+    AUTO_PAUSED_TEMP,        // Pausado por temperatura baixa
+    AUTO_STOPPED             // Parado (transitório)
 };
 AutoState autoState = AUTO_IDLE;
-const float AUTO_TARGET_TEMP = 260.0;
-const float AUTO_MIN_TEMP = 245.0;
-const int AUTO_MAX_RPM = 60;
+
+// Constantes para temperatura
+const float AUTO_TARGET_TEMP = 210.0;      // Temperatura alvo máxima
+const float TEMP_MIN_EXTRUSION = 200.0;    // Abaixo disso, não extrudar
+const float TEMP_IDEAL = 210.0;            // Temperatura ideal de operação
+
+// Constantes para curva de velocidade dinâmica (baseada em temperatura)
+const int RPM_AT_IDEAL = 55;               // RPM na temperatura ideal (210°C)
+const int RPM_AT_MAX_TEMP = 60;            // RPM na temperatura máxima (   )
 
 //stepper motor pins
 const int stepDirPin = 2;
@@ -95,7 +102,7 @@ int stepSpeed = 0;
 long lastStepTime = 0;
 
 // Novas variáveis para controle suave
-volatile bool stepDirection = true;
+volatile bool stepDirection = true; // false = CCW (LOW), true = CW (HIGH) - INVERTIDO!
 volatile unsigned long stepCounter = 0;
 volatile bool enableStepping = false;
 
@@ -164,7 +171,7 @@ void setup() {
     pinMode(stepPin, OUTPUT);
     pinMode(stepDirPin, OUTPUT);
     digitalWrite(stepPin, LOW);     // Garantir LOW imediatamente
-    digitalWrite(stepDirPin, LOW);  // Definir direção
+    digitalWrite(stepDirPin, stepDirection ? HIGH : LOW);  // Definir direção baseada em stepDirection
     
     // Pequeno delay para estabilizar
     delay(50);
@@ -221,32 +228,39 @@ void setup() {
     delay(100);
 }
 
+void UpdateStepperDirection() {
+    // Atualiza o pino de direção baseado na variável stepDirection
+    digitalWrite(stepDirPin, stepDirection ? HIGH : LOW);
+    Serial.print("Direção do motor: ");
+    Serial.println(stepDirection ? "CW (HIGH)" : "CCW (LOW)");
+}
+
 void UpdateStepperSpeed(int rpm) {
     if (rpm < 1) rpm = 1;
     // Com 1/16 microstepping, limitar velocidade para compensar perda de torque
     if (rpm > 150) rpm = 150; // Reduzido devido ao microstepping
-    
+
     // Calcular com microstepping - 16x mais pulsos!
     unsigned long totalStepsPerRev = stepsPerRevolution * microstepMultiplier; // 200 * 16 = 3200 steps/rev
     unsigned long stepsPerSecond = (totalStepsPerRev * rpm) / 60;
     unsigned long timerFreq = stepsPerSecond * 2;
-    
+
     unsigned long timerTicks;
-    
+
     cli();
-    
+
     // Com 1/16, sempre usar prescaler menor para alta frequência
     TCCR1B &= ~((1 << CS12) | (1 << CS11) | (1 << CS10));
     TCCR1B |= (1 << CS11); // Prescaler 8 (obrigatório para 1/16)
     timerTicks = (F_CPU / 8 / timerFreq) - 1;
-    
+
     if (timerTicks > 65535) timerTicks = 65535;
     if (timerTicks < 50) timerTicks = 50; // Mínimo maior para estabilidade
-    
+
     OCR1A = timerTicks;
-    
+
     sei();
-    
+
     // Debug mostrando carga do sistema
     if (rpm % 20 == 0) {
         Serial.print("RPM: ");
@@ -395,9 +409,10 @@ void loop() {
         menuBtnState = 1;
         Serial.println("Menu");
 
-        // Se estava no modo auto, para tudo antes de sair
+        // Se estava no modo auto, apenas reseta o estado (mantém temp e motor)
         if (menu == 3) {
-            autoState = AUTO_STOPPED;
+            autoState = AUTO_IDLE;
+            Serial.println("Saiu do modo Auto - Estado resetado");
         }
 
         menu = (menu + 1) % 4; // Agora são 4 menus (0, 1, 2, 3)
@@ -412,16 +427,20 @@ void loop() {
 
         if (menu == 2) { // Controle manual do motor
             if (stepControl == 0) {
+                UpdateStepperDirection(); // Atualiza direção antes de ligar
                 stepControl = 1;
             } else {
                 stepControl = 0;
             }
         } else if (menu == 3) { // Controle da automação
             if (autoState == AUTO_IDLE) {
-                autoState = AUTO_PREHEATING;
-            } else if (autoState == AUTO_READY_TO_START) {
-                autoState = AUTO_RUNNING;
+                autoState = AUTO_CONFIRM_PREHEAT; // Pede confirmação primeiro
+            } else if (autoState == AUTO_CONFIRM_PREHEAT) {
+                autoState = AUTO_PREHEATING; // Confirmou, começa a aquecer
+            } else if (autoState == AUTO_READY_TO_EXTRUDE) {
+                autoState = AUTO_RUNNING; // Confirmou, começa a extrusar
                 stepSpeed = 5; // Inicia o motor devagar
+                UpdateStepperDirection(); // Atualiza direção antes de ligar
                 stepControl = 1;
             } else {
                 autoState = AUTO_STOPPED; // Para o processo se estiver rodando
@@ -494,15 +513,22 @@ void loop() {
     } else if (menu == 3) { // Novo menu de Automação
         switch (autoState) {
             case AUTO_IDLE:
-                targetTemp = 0;
-                stepControl = 0;
-                stepSpeed = 0;
-                UpdateStepperSpeed(0);
-
+                // Não mexe em nada, só mostra a tela
                 lcd.setCursor(0, 0);
-                lcd.print("Modo Auto");
+                lcd.print("Auto: Parado    "); // 16 chars
                 lcd.setCursor(0, 1);
-                lcd.print("Pressione p/ Inic.");
+                lcd.print("Press p/Iniciar "); // 16 chars
+                break;
+
+            case AUTO_CONFIRM_PREHEAT:
+                // Ainda não aquece
+                lcd.setCursor(0, 0);
+                lcd.print("Aquecer a ");      // 10 chars
+                lcd.print((int)AUTO_TARGET_TEMP); // +3 = 13
+                lcd.write(byte(0));           // +1 = 14
+                lcd.print("? ");              // +2 = 16
+                lcd.setCursor(0, 1);
+                lcd.print("Press=S Menu=N  "); // 16 chars
                 break;
 
             case AUTO_PREHEATING:
@@ -512,91 +538,94 @@ void loop() {
                 UpdateStepperSpeed(0);
 
                 lcd.setCursor(0, 0);
-                lcd.print("Aquecendo...");
+                lcd.print("Aquecendo...    "); // 16 chars
                 lcd.setCursor(0, 1);
-                lcd.print("T:");
-                lcd.print((int)currentTemp);
-                lcd.print("/");
-                lcd.print((int)AUTO_TARGET_TEMP);
-                lcd.write(byte(0));
+                lcd.print("T:");              // 2 chars
+                lcd.print((int)currentTemp);  // +3 = 5
+                lcd.write(byte(0));           // +1 = 6
+                lcd.print("/");               // +1 = 7
+                lcd.print((int)AUTO_TARGET_TEMP); // +3 = 10
+                lcd.write(byte(0));           // +1 = 11
+                lcd.print("     ");           // +5 = 16
 
                 if (currentTemp >= AUTO_TARGET_TEMP) {
-                    autoState = AUTO_READY_TO_START; // Muda para o estado de prontidão
+                    autoState = AUTO_READY_TO_EXTRUDE;
                 }
                 break;
 
-            case AUTO_READY_TO_START:
-                targetTemp = AUTO_TARGET_TEMP; // Mantém a temperatura
-                stepControl = 0; // Motor continua parado
+            case AUTO_READY_TO_EXTRUDE:
+                targetTemp = AUTO_TARGET_TEMP;
+                stepControl = 0;
                 stepSpeed = 0;
                 UpdateStepperSpeed(0);
 
                 lcd.setCursor(0, 0);
-                lcd.print("Pronto. Pressione");
+                lcd.print("Pronto! T:");     // 10 chars
+                lcd.print((int)currentTemp); // +3 = 13
+                lcd.write(byte(0));          // +1 = 14
+                lcd.print("  ");             // +2 = 16
                 lcd.setCursor(0, 1);
-                lcd.print("para iniciar...");
+                lcd.print("Press=Extrusar  "); // 16 chars
                 break;
 
             case AUTO_RUNNING:
                 targetTemp = AUTO_TARGET_TEMP;
+                UpdateStepperDirection(); // Garante que a direção está correta
                 stepControl = 1;
 
-                // Lógica de controle de velocidade
-                if (currentTemp < AUTO_MIN_TEMP) {
+                // ============ CURVA DE VELOCIDADE DINÂMICA ============
+                if (currentTemp < TEMP_MIN_EXTRUSION) {
                     autoState = AUTO_PAUSED_TEMP;
+                    stepSpeed = 0;
+                } else if (currentTemp < TEMP_IDEAL) {
+                    stepSpeed = map(currentTemp, TEMP_MIN_EXTRUSION, TEMP_IDEAL, 0, RPM_AT_IDEAL);
                 } else if (currentTemp < AUTO_TARGET_TEMP) {
-                    // Reduz a velocidade proporcionalmente
-                    stepSpeed = map(currentTemp, AUTO_MIN_TEMP, AUTO_TARGET_TEMP, 0, AUTO_MAX_RPM);
+                    stepSpeed = map(currentTemp, TEMP_IDEAL, AUTO_TARGET_TEMP, RPM_AT_IDEAL, RPM_AT_MAX_TEMP);
                 } else {
-                    // Aceleração gradual até o máximo
-                    static unsigned long lastRpmIncrease = 0;
-                    if (millis() - lastRpmIncrease > 200) { // Aumenta a cada 200ms
-                        if (stepSpeed < AUTO_MAX_RPM) {
-                            stepSpeed++;
-                        }
-                        lastRpmIncrease = millis();
-                    }
-                    stepSpeed = constrain(stepSpeed, 0, AUTO_MAX_RPM);
+                    stepSpeed = RPM_AT_MAX_TEMP;
                 }
+
+                stepSpeed = constrain(stepSpeed, 0, RPM_AT_MAX_TEMP);
                 UpdateStepperSpeed(stepSpeed);
 
                 lcd.setCursor(0, 0);
-                lcd.print("T:");
-                lcd.print((int)currentTemp);
-                lcd.write(byte(0));
-                lcd.print(" V:");
-                lcd.print(stepSpeed);
-                lcd.print("rpm ");
+                lcd.print("T:");             // 2 chars
+                lcd.print((int)currentTemp); // +3 = 5
+                lcd.write(byte(0));          // +1 = 6
+                lcd.print(" RPM:");          // +5 = 11
+                if (stepSpeed < 10) {
+                    lcd.print(" ");          // Padding para 2 dígitos
+                }
+                lcd.print(stepSpeed);        // +2 = 13-15
+                lcd.print("  ");             // Preenche até 16
                 lcd.setCursor(0, 1);
-                lcd.print("Extrudando...");
+                lcd.print("Extrudando...   "); // 16 chars
                 break;
 
             case AUTO_PAUSED_TEMP:
                 targetTemp = AUTO_TARGET_TEMP;
-                stepControl = 0; // Pausa o motor
+                stepControl = 0;
                 stepSpeed = 0;
                 UpdateStepperSpeed(0);
 
                 lcd.setCursor(0, 0);
-                lcd.print("Temp. Baixa!");
+                lcd.print("PAUSA T<");       // 8 chars
+                lcd.print((int)TEMP_MIN_EXTRUSION); // +3 = 11
+                lcd.write(byte(0));          // +1 = 12
+                lcd.print("    ");           // +4 = 16
                 lcd.setCursor(0, 1);
-                lcd.print("T:");
-                lcd.print((int)currentTemp);
-                lcd.print("/");
-                lcd.print((int)AUTO_TARGET_TEMP);
-                lcd.write(byte(0));
+                lcd.print("Atual:");         // 6 chars
+                lcd.print((int)currentTemp); // +3 = 9
+                lcd.write(byte(0));          // +1 = 10
+                lcd.print("      ");         // +6 = 16
 
-                if (currentTemp >= AUTO_TARGET_TEMP) {
+                if (currentTemp >= TEMP_IDEAL) {
                     autoState = AUTO_RUNNING;
                 }
                 break;
 
             case AUTO_STOPPED:
-                targetTemp = 0;
-                stepControl = 0;
-                stepSpeed = 0;
-                UpdateStepperSpeed(0);
-                autoState = AUTO_IDLE; // Volta para o estado inicial
+                autoState = AUTO_IDLE;
                 lcd.clear();
                 break;
         }
