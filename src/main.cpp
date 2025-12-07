@@ -78,6 +78,7 @@ const int RPM_AT_MAX_TEMP = 60;            // RPM na temperatura máxima (   )
 //stepper motor pins
 const int stepDirPin = 2;
 const int stepPin = 3;
+const int stepEnablePin = 6;  // Pino ENABLE para economia de energia
 
 //stepper variables
 const int stepsPerRevolution = 200;
@@ -170,9 +171,12 @@ void setup() {
     // PRIMEIRA COISA: Configurar pinos do motor para estado seguro
     pinMode(stepPin, OUTPUT);
     pinMode(stepDirPin, OUTPUT);
+    pinMode(stepEnablePin, OUTPUT);
+
     digitalWrite(stepPin, LOW);     // Garantir LOW imediatamente
     digitalWrite(stepDirPin, stepDirection ? HIGH : LOW);  // Definir direção baseada em stepDirection
-    
+    digitalWrite(stepEnablePin, HIGH);  // Motor DESABILITADO inicialmente (economia de energia)
+
     // Pequeno delay para estabilizar
     delay(50);
 
@@ -220,10 +224,11 @@ void setup() {
     stepControl = 0;
     stepSpeed = 0;
     targetTemp = 0;
-    
-    // Agora sim, habilitar interrupção do timer
-    TIMSK1 |= (1 << OCIE1A);
-    
+
+    // NÃO habilitar ISR aqui - será habilitada apenas quando motor ligar
+    // Isso economiza CPU quando motor está parado
+    // TIMSK1 |= (1 << OCIE1A); // ← Removido! Agora controlado por SetMotorEnabled()
+
     // Delay final para estabilização completa
     delay(100);
 }
@@ -233,6 +238,25 @@ void UpdateStepperDirection() {
     digitalWrite(stepDirPin, stepDirection ? HIGH : LOW);
     Serial.print("Direção do motor: ");
     Serial.println(stepDirection ? "CW (HIGH)" : "CCW (LOW)");
+}
+
+void SetMotorEnabled(bool enable) {
+    // Controle inteligente do pino ENABLE para economia de energia
+    if (enable) {
+        // Habilita motor: ENABLE = LOW (driver ativo)
+        digitalWrite(stepEnablePin, LOW);
+        // Habilita interrupção do timer para gerar pulsos
+        TIMSK1 |= (1 << OCIE1A);
+        Serial.println("Motor HABILITADO (bobinas energizadas)");
+    } else {
+        // Desabilita motor: ENABLE = HIGH (driver desligado)
+        digitalWrite(stepEnablePin, HIGH);
+        // Desabilita interrupção do timer para economizar CPU
+        TIMSK1 &= ~(1 << OCIE1A);
+        // Garante que o pino STEP está em LOW
+        digitalWrite(stepPin, LOW);
+        Serial.println("Motor DESABILITADO (economia ~1.5A)");
+    }
 }
 
 void UpdateStepperSpeed(int rpm) {
@@ -428,8 +452,10 @@ void loop() {
         if (menu == 2) { // Controle manual do motor
             if (stepControl == 0) {
                 UpdateStepperDirection(); // Atualiza direção antes de ligar
+                SetMotorEnabled(true);    // Habilita motor (ISR + ENABLE pin)
                 stepControl = 1;
             } else {
+                SetMotorEnabled(false);   // Desabilita motor (economia de energia)
                 stepControl = 0;
             }
         } else if (menu == 3) { // Controle da automação
@@ -441,6 +467,7 @@ void loop() {
                 autoState = AUTO_RUNNING; // Confirmou, começa a extrusar
                 stepSpeed = 5; // Inicia o motor devagar
                 UpdateStepperDirection(); // Atualiza direção antes de ligar
+                SetMotorEnabled(true);    // Habilita motor (ISR + ENABLE pin)
                 stepControl = 1;
             } else {
                 autoState = AUTO_STOPPED; // Para o processo se estiver rodando
@@ -570,13 +597,21 @@ void loop() {
 
             case AUTO_RUNNING:
                 targetTemp = AUTO_TARGET_TEMP;
-                UpdateStepperDirection(); // Garante que a direção está correta
+
+                // Habilita motor apenas na primeira vez que entra neste estado
+                static bool autoRunningMotorEnabled = false;
+                if (!autoRunningMotorEnabled) {
+                    UpdateStepperDirection(); // Garante que a direção está correta
+                    SetMotorEnabled(true);    // Habilita motor
+                    autoRunningMotorEnabled = true;
+                }
                 stepControl = 1;
 
                 // ============ CURVA DE VELOCIDADE DINÂMICA ============
                 if (currentTemp < TEMP_MIN_EXTRUSION) {
                     autoState = AUTO_PAUSED_TEMP;
                     stepSpeed = 0;
+                    autoRunningMotorEnabled = false; // Reset para próxima vez
                 } else if (currentTemp < TEMP_IDEAL) {
                     stepSpeed = map(currentTemp, TEMP_MIN_EXTRUSION, TEMP_IDEAL, 0, RPM_AT_IDEAL);
                 } else if (currentTemp < AUTO_TARGET_TEMP) {
@@ -604,6 +639,13 @@ void loop() {
 
             case AUTO_PAUSED_TEMP:
                 targetTemp = AUTO_TARGET_TEMP;
+
+                // Desabilita motor apenas na primeira vez que entra neste estado
+                static bool autoPausedMotorDisabled = false;
+                if (!autoPausedMotorDisabled) {
+                    SetMotorEnabled(false);  // Desabilita motor (economia)
+                    autoPausedMotorDisabled = true;
+                }
                 stepControl = 0;
                 stepSpeed = 0;
                 UpdateStepperSpeed(0);
@@ -621,6 +663,7 @@ void loop() {
 
                 if (currentTemp >= TEMP_IDEAL) {
                     autoState = AUTO_RUNNING;
+                    autoPausedMotorDisabled = false; // Reset para próxima vez
                 }
                 break;
 
@@ -669,14 +712,20 @@ void loop() {
     //Now we can write the PWM signal to the mosfet on digital pin D5
     analogWrite(PWM_pin,PID_value);
     previous_error = PID_error;     //Remember to store the previous error for next loop.
-    
-    Serial.print(targetTemp);
-    Serial.print("      ");
-    Serial.print(currentTemp);
-    Serial.print("      ");
-    Serial.print(PID_value);
-    Serial.print("      ");
-    Serial.println(PID_error);
+
+    // Debug serial - apenas a cada 500ms para não spammar (economia de energia)
+    static unsigned long lastSerialPrint = 0;
+    if (millis() - lastSerialPrint > 500) {
+        Serial.print("Temp: ");
+        Serial.print(targetTemp);
+        Serial.print("/");
+        Serial.print(currentTemp);
+        Serial.print(" | PID: ");
+        Serial.print(PID_value);
+        Serial.print(" | Err: ");
+        Serial.println(PID_error);
+        lastSerialPrint = millis();
+    }
 }
 
 // ISR agora roda 16x mais vezes! (A 100 RPM = ~5300 Hz)
