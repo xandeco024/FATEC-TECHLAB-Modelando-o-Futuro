@@ -1,7 +1,20 @@
 {
   "permissions": {
     "allow": [
-      "Bash(platformio run)"
+      "Bash(platformio run)",
+      "Bash(git log:*)",
+      "Bash(while read commit)",
+      "Bash(do echo \"=== $commit ===\")",
+      "Bash(done)",
+      "Bash(mode:*)",
+      "Bash(powershell -Command \"Get-WMIObject Win32_SerialPort | Select-Object DeviceID,Description\")",
+      "Read(//c/Users/SUPORTE-FATEC/Desktop/xandeco/**)",
+      "Bash(git clone:*)",
+      "Bash(cat:*)",
+      "Bash(C:UsersSUPORTE-FATEC.platformiopenvScriptsplatformio.exe run)",
+      "Bash(~/.platformio/penv/Scripts/platformio.exe run)",
+      "Bash(wmic:*)",
+      "Bash(powershell \"Get-PSDrive -PSProvider FileSystem | Where-Object {$_Used -ne $null -and $_Free -ne $null} | Select-Object Name,Root,@{Name=''Size(GB)'';Expression={[math]::Round($_Used/1GB + $_Free/1GB,2)}}\")"
     ],
     "deny": [],
     "ask": []

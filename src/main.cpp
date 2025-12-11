@@ -16,6 +16,13 @@ bool heatingEnabled = true;
 unsigned long lastValidTempTime = 0;
 float lastValidTemp = 25.0;
 
+// Controle do cooler (ventilador)
+const int fanRelayPin = 7;
+const float FAN_ON_THRESHOLD = -5.0;    // Liga quando 5°C acima do alvo
+const float FAN_OFF_THRESHOLD = -2.0;   // Desliga quando chegar a 2°C acima do alvo (histerese)
+const float FAN_EMERGENCY_TEMP = 280.0; // Liga em emergência se passar de 280°C
+bool fanState = false;
+
 // Controles antigos (potenciômetro) removidos
 /*
 const int potPin = A1;
@@ -125,7 +132,7 @@ const float kelvin25 = 298.15;  // 25ºC em Kelvin
 const float resistance25 = 100000.0;    // Resistência do termistor a 25ºC
 
 int PWM_pin = 5; //Pin for PWM signal to the MOSFET driver (the BJT npn with pullup)
-int but1 = 7;
+// int but1 = 7; // REMOVIDO - Pino 7 agora é fanRelayPin
 int STEP = 3;
 int DIR = 4;
 int LED = 13;
@@ -199,7 +206,11 @@ void setup() {
     lcd.backlight();
 
     pinMode(PWM_pin, OUTPUT);
-    
+
+    // Configurar pino do cooler (relé NO - Normally Open)
+    pinMode(fanRelayPin, OUTPUT);
+    digitalWrite(fanRelayPin, LOW);  // Cooler desligado inicialmente
+
     // Garantir que PWM está desligado inicialmente
     analogWrite(PWM_pin, 0);
 
@@ -347,6 +358,66 @@ void ReadTemp() {
     }
 }
 
+void ControlCooler() {
+    // SEGURANÇA: Modo de emergência - liga cooler se temperatura muito alta
+    if (currentTemp >= FAN_EMERGENCY_TEMP) {
+        if (!fanState) {
+            digitalWrite(fanRelayPin, HIGH);
+            fanState = true;
+            Serial.println("FAN EMERGÊNCIA - Temperatura crítica!");
+        }
+        return; // Não processa lógica normal em emergência
+    }
+
+    // Se sistema em erro ou sem aquecimento (targetTemp = 0), desliga cooler
+    if (systemError || targetTemp <= 0) {
+        if (fanState) {
+            digitalWrite(fanRelayPin, LOW);
+            fanState = false;
+            Serial.println("FAN DESLIGADO - Sistema em standby/erro");
+        }
+        return;
+    }
+
+    // LÓGICA SIMPLES E EFICAZ:
+    // Liga cooler quando temperatura está ACIMA do alvo (resfriamento ativo)
+    // Desliga quando está ABAIXO do alvo (permite aquecimento)
+
+    // DEBUG detalhado (temporário)
+    static unsigned long lastDebugTime = 0;
+    if (millis() - lastDebugTime > 2000) {
+        Serial.print("DEBUG FAN - Erro: ");
+        Serial.print(PID_error);
+        Serial.print(" | Thresh ON: ");
+        Serial.print(FAN_ON_THRESHOLD);
+        Serial.print(" | Thresh OFF: ");
+        Serial.print(FAN_OFF_THRESHOLD);
+        Serial.print(" | Estado: ");
+        Serial.println(fanState ? "ON" : "OFF");
+        lastDebugTime = millis();
+    }
+
+    // Liga o cooler se temperatura está 5°C+ acima do alvo
+    if (PID_error < FAN_ON_THRESHOLD && !fanState) {
+        digitalWrite(fanRelayPin, HIGH);
+        fanState = true;
+        Serial.print(">>> FAN LIGADO - Temp muito alta: ");
+        Serial.print(currentTemp);
+        Serial.print("°C (alvo: ");
+        Serial.print(targetTemp);
+        Serial.println("°C)");
+    }
+    // Desliga quando temperatura voltar próxima do alvo (histerese)
+    // Isso permite que o aquecedor trabalhe normalmente
+    else if (PID_error > FAN_OFF_THRESHOLD && fanState) {
+        digitalWrite(fanRelayPin, LOW);
+        fanState = false;
+        Serial.print(">>> FAN DESLIGADO - Temperatura normalizada: ");
+        Serial.print(currentTemp);
+        Serial.println("°C");
+    }
+}
+
 // Função ReadStablePot removida pois não é mais necessária
 // Função ReadSmooth removida pois não é mais necessária
 
@@ -358,12 +429,13 @@ void loop() {
     if (currentTemp > TEMP_EMERGENCY_SHUTDOWN) {
         systemError = true;
         analogWrite(PWM_pin, 0);  // Desligar aquecimento imediatamente
+        digitalWrite(fanRelayPin, HIGH);  // LIGAR cooler em emergência
         stepControl = 0;          // Parar motor
         lcd.clear();
         lcd.print("EMERGENCIA!");
         lcd.setCursor(0, 1);
         lcd.print("T>320C PARADO");
-        Serial.println("EMERGENCIA: Temperatura muito alta!");
+        Serial.println("EMERGENCIA: Temperatura muito alta! FAN LIGADO!");
         while(1); // Para o sistema completamente
     }
     
@@ -501,9 +573,11 @@ void loop() {
         lcd.print(tempBuffer);
         lcd.write(byte(0));
         
-        // Mostrar status de aquecimento e avisos
+        // Mostrar status de aquecimento, resfriamento e avisos
         if (systemError) {
             lcd.print(" ERR");
+        } else if (fanState) {
+            lcd.print(" FAN"); // Cooler ligado
         } else if (PID_value > 0 && targetTemp > 0) {
             lcd.print(" AQ"); // Aquecendo
         } else {
@@ -713,6 +787,9 @@ void loop() {
     analogWrite(PWM_pin,PID_value);
     previous_error = PID_error;     //Remember to store the previous error for next loop.
 
+    // Controlar cooler baseado em temperatura e PID
+    ControlCooler();
+
     // Debug serial - apenas a cada 500ms para não spammar (economia de energia)
     static unsigned long lastSerialPrint = 0;
     if (millis() - lastSerialPrint > 500) {
@@ -723,7 +800,9 @@ void loop() {
         Serial.print(" | PID: ");
         Serial.print(PID_value);
         Serial.print(" | Err: ");
-        Serial.println(PID_error);
+        Serial.print(PID_error);
+        Serial.print(" | FAN: ");
+        Serial.println(fanState ? "ON" : "OFF");
         lastSerialPrint = millis();
     }
 }
